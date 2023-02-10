@@ -1,0 +1,2 @@
+class ClickupObjectNotFound(Exception):
+    pass
