@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.adreportrun import AdReportRun
-import time
+import time, json, re, globals
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -143,7 +143,7 @@ def get_custom_field_value(input_list, name):
     return None
 
 
-def facebook_data_organized_by_date_preset(business, date_presets):
+def facebook_data_organized_by_date_preset(business, date_presets, data_processor=None):
     """
     Retrieves data at for a variety of date presets. Returns a dictionary of ad data with the following format. It is organized by date presets
 
@@ -155,31 +155,80 @@ def facebook_data_organized_by_date_preset(business, date_presets):
     ad_accounts = facebook_business_active_ad_accounts(business=business)
     data = {}
     for presets in date_presets:
-        data[presets] = facebook_ad_accounts_ad_data(ad_accounts, presets)
+        data[presets] = facebook_ad_accounts_ad_data(ad_accounts, presets, data_processor)
     return data
 
 
-def facebook_ad_accounts_ad_data(ad_accounts, date_preset=None):
+def facebook_ad_accounts_ad_data(ad_accounts, date_preset, data_processor):
     """
-    Given a list of ad_accounts, this function retreives ad data for preset date and returns a dictionary with the following format
-    {
-        "retailer id":{
-                "spend":spend,
-                "actions":actions,
-            },
-            "unsucessful_reports":[list of strings representing account ids],
-            "unsucessful_requests":[list of future objects]
-    }
+    Generates ad reports for a list of Facebook ad accounts, processes the data, and returns the result.
+
+    Parameters:
+    - ad_accounts (list): A list of Facebook ad accounts for which ad reports should be generated.
+    - date_preset (str): A string representing the date preset to use when generating ad reports.
+    - data_processor (callable): A callable object that will process the generated ad reports.
+
+    Returns:
+    - ret (dict): A dictionary containing the following keys:
+        - "retailers": the result of calling `data_processor` on the generated ad reports.
+        - "unsuccessful_reports": a list of ad reports that could not be processed.
+        - "unsuccessful_request_futures": a list of ad account requests futures that return an exception.
     """
+
     # generate list of ad reports using threads
-    succesfully_created_reports, unsuccessful_requests = process_ad_account_requests(
+    succesfully_created_reports, unsuccessful_request_futures = process_ad_account_requests(
         ad_accounts, date_preset=date_preset
     )
-    # TODO: Retry with the unsucessful reports
-    ads, unsucessful_reports = process_ad_reports(succesfully_created_reports)
-    ads = facebook_ad_data_organized_by_retailer_id(ads)
+    # TODO: Retry with the unsuccessful reports
+    ads, unsuccessful_reports = process_ad_reports(succesfully_created_reports)
+    ret = {
+        "unsuccessful_reports": unsuccessful_reports,
+        "unsuccessful_request_futures": unsuccessful_request_futures,
+    }
+    if data_processor is None:
+        ret["data"] = ads
+    else:
+        ret["data"] = data_processor(ads)
+    return ret
 
-    return ads, unsucessful_reports, unsuccessful_requests
+
+def ads_retailer_id_processor(ads):
+    pattern = r"^\d{3}"
+    return facebook_data_organized_by_regex(ads, "ad_name", pattern)
+
+
+def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
+    """
+    filters a list of ad insights
+    """
+    ret = {}
+    pattern = re.compile(regex_pattern)
+    for obj in list_of_objs:
+        extracted = extract_regex_expression(obj[target_key], pattern)
+        if extracted:
+            if extracted not in ret.keys():
+                ret[extracted] = [obj]
+            else:
+                ret[extracted].append(obj)
+    return ret
+
+
+def extract_regex_expression(string, expression):
+    """
+    Extracts a substring from `string` using a regular expression `expression`.
+
+    Parameters:
+        - string (str): The input string from which to extract a substring.
+        - expression (str): A string representing a regular expression that will be used to extract a substring from `string`.
+
+    Returns:
+        - match (str or None): If a match is found, the extracted substring is returned. Otherwise, `None` is returned.
+    """
+    match = re.search(expression, string)
+    if match:
+        return match.group()
+    else:
+        return None
 
 
 def facebook_business_active_ad_accounts(business):
@@ -219,12 +268,12 @@ def process_ad_account_requests(active_ad_accounts, date_preset):
     Returns:
     A tuple with two elements:
         - ad_reports (list): A list of reports, where each report is a facebook.adobject.adreportrun object.
-        - unsuccessful_requests (list): A list of unsuccessful request futures.
+        - unsuccessful_request_futures (list): A list of unsuccessful request futures.
 
     """
 
     ad_reports = []
-    unsuccessful_requests = []
+    unsuccessful_request_futures = []
     fields = [
         AdsInsights.Field.ad_name,
         AdsInsights.Field.spend,
@@ -253,8 +302,8 @@ def process_ad_account_requests(active_ad_accounts, date_preset):
                 result = future.result()
                 ad_reports.append(result)
             except:
-                unsuccessful_requests.append(future)
-    return ad_reports, unsuccessful_requests
+                unsuccessful_request_futures.append(future)
+    return ad_reports, unsuccessful_request_futures
 
 
 def process_ad_reports(ad_reports):
@@ -277,12 +326,37 @@ def process_ad_reports(ad_reports):
         results_queue = [executor.submit(wait_for_job, report) for report in ad_reports]
         for future in as_completed(results_queue):
             result = future.result()
-            if result[AdReportRun.Field.async_status].lower() == "job completed":
-                cursor = result.get_result(params={"limit": 1000})
-                ads.extend(cursor)
-            else:
+            try:
+                # TODO: I will need to decouple the following lines of code
+                if result[AdReportRun.Field.async_status].lower() == "job completed":
+                    account_id = result[AdReportRun.Field.account_id]
+                    cursor = result.get_result(params={"limit": 500})
+                    write_account_limits(cursor.headers())
+                    ads.extend(cursor)
+                    print(f"Account: {account_id} written")
+                else:
+                    unsuccessful_reports.append(result)
+            except Exception as e:
+                print({"error": e})
                 unsuccessful_reports.append(result)
     return ads, unsuccessful_reports
+
+
+def write_account_limits(headers):
+    """
+    Writes account usage information to the global `FB_RATES` dictionary.
+
+    Parameters:
+    - headers (dict): A dictionary containing header information, including the key "x-business-use-case-usage" with a JSON-encoded string value representing account usage information.
+
+    Returns:
+    - None
+
+    The function extracts the account usage information from the headers and writes it to the `FB_RATES` dictionary, where the keys are account IDs and the values are the usage information for each account.
+    """
+    account_info = json.loads(headers["x-business-use-case-usage"])
+    for account_id in account_info.keys():
+        globals.FB_RATES[account_id] = account_info[account_id]
 
 
 def create_async_job(account, fields, params):
@@ -327,3 +401,21 @@ def wait_for_job(job):
     string = f"ID:{account_id} Type:result"
     print(string)
     return job.api_get()
+
+
+def write_object_structure(object):
+    with open(f"structures/{object.__class__.__name__}.json", "w") as file:
+        file.write(json.dumps(object._data, indent=4))
+
+
+def count_objects(d):
+    count = 0
+    if isinstance(d, dict):
+        for value in d.values():
+            count += count_objects(value)
+    elif isinstance(d, list):
+        for value in d:
+            count += count_objects(value)
+    else:
+        count = 1
+    return count
