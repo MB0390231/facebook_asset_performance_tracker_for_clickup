@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.adreportrun import AdReportRun
-import time, json, re, globals, copy
+import time, json, re, globals, copy, csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -401,3 +401,25 @@ def count_objects(d):
     else:
         count = 1
     return count
+
+
+def write_to_csv(objects, filename, fieldnames=None, default=None):
+    """
+    Write a list of dictionaries to a CSV file.
+
+    Parameters:
+        - data (list): A list of dictionaries where each dictionary represents a row in the CSV file.
+        - fieldnames (list): A list of field names that correspond to the keys in the dictionaries.
+        - filename (str): The name of the CSV file to write to.
+        - default_value (str): A default value to use for dictionaries that do not have a key corresponding to one of the fieldnames.
+
+    The function writes the list of dictionaries in data to a CSV file named filename. The field names in the CSV file are specified in the fieldnames parameter. If a dictionary in data is missing a key corresponding to one of the fieldnames, the default_value is used instead. The function returns nothing.
+    """
+    if fieldnames is None:
+        fieldnames = set().union(*(obj.keys() for obj in objects))
+    with open(filename, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for obj in objects:
+            row = {field: obj.get(field, default) for field in fieldnames}
+            writer.writerow(row)
