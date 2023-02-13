@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.adreportrun import AdReportRun
-import time, json, re, globals
+import time, json, re, globals, copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -164,32 +164,80 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset, data_processor):
     Generates ad reports for a list of Facebook ad accounts, processes the data, and returns the result.
 
     Parameters:
-    - ad_accounts (list): A list of Facebook ad accounts for which ad reports should be generated.
-    - date_preset (str): A string representing the date preset to use when generating ad reports.
-    - data_processor (callable): A callable object that will process the generated ad reports.
+        - ad_accounts (list): A list of Facebook ad accounts for which ad reports should be generated.
+        - date_preset (str): A string representing the date preset to use when generating ad reports.
+        - data_processor (callable, optional): A callable object that will process the generated ad reports. If not provided, the processed ad reports will be stored in the returned dictionary under the key "data".
 
     Returns:
-    - ret (dict): A dictionary containing the following keys:
-        - "retailers": the result of calling `data_processor` on the generated ad reports.
+        - ret (dict): A dictionary containing the following keys:
         - "unsuccessful_reports": a list of ad reports that could not be processed.
-        - "unsuccessful_request_futures": a list of ad account requests futures that return an exception.
+        - "unsuccessfully_written": a list of ad reports that could not be written to the list passed to process_report
+        - "unsuccessful_request_futures": a list of ad account requests that could not be processed.
+        - "uncompleted_report_futures": a list of ad report jobs that could not be completed.
+        - "data": the result of calling data_processor on the generated ad reports, or the processed ads
     """
-
+    insights_params = create_insights_params(date_preset)
     # generate list of ad reports using threads
-    succesfully_created_reports, unsuccessful_request_futures = process_ad_account_requests(
-        ad_accounts, date_preset=date_preset
+    succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
+        ad_accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
     )
+    completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
     # TODO: Retry with the unsuccessful reports
-    ads, unsuccessful_reports = process_ad_reports(succesfully_created_reports)
+    successful_reports, unsuccessful_reports = organize_reports(completed_reports)
+    ads = []
+    successfully_written, unsuccessfully_written = run_async_jobs(successful_reports, proccess_report, ads)
     ret = {
         "unsuccessful_reports": unsuccessful_reports,
+        "unsuccessfully_written": unsuccessfully_written,
         "unsuccessful_request_futures": unsuccessful_request_futures,
+        "uncompleted_report_futures": uncompleted_report_futures,
     }
     if data_processor is None:
         ret["data"] = ads
     else:
         ret["data"] = data_processor(ads)
     return ret
+
+
+def create_insights_params(date_preset):
+    # ads the date_preset to the global DEFAULT_INSIGHTS_PARAMS object
+    insights_params = copy.deepcopy(globals.DEFAULT_INSIGHTS_PARAMS)
+    insights_params["date_preset"] = date_preset
+    return insights_params
+
+
+def proccess_report(report, list):
+    """I want the function to add the report results to a given list"""
+    # TODO: I will want to implement try and except to catch facebook_errors
+    cursor = report.get_result(params={"limit": 500})
+    # write accounts rate limit to globals.RATE_LIMIT
+    write_account_limits(cursor.headers())
+    list.extend(cursor)
+    print(f"Account: {report[AdReportRun.Field.account_id]} written")
+    return
+
+
+def organize_reports(reports):
+    """
+    Organizes Facebook AdReportRun objects into successful and unsuccessful reports.
+
+    Parameters:
+        - reports (list): A list of Facebook AdReportRun objects.
+
+    Returns:
+        A tuple of two elements:
+            - successful_reports (list): A list of successful Facebook AdReportRun objects.
+            - unsuccessful_reports (list): A list of unsuccessful Facebook AdReportRun objects.
+
+    The function separates the Facebook AdReportRun objects in `reports` into two lists, one for successful reports and one for unsuccessful reports, based on the value of the `async_status` field. The two lists are returned as a tuple.
+    """
+    successful_reports = [
+        report for report in reports if report[AdReportRun.Field.async_status].lower() == "job completed"
+    ]
+    unsuccessful_reports = [
+        report for report in reports if report[AdReportRun.Field.async_status].lower() != "job completed"
+    ]
+    return successful_reports, unsuccessful_reports
 
 
 def ads_retailer_id_processor(ads):
@@ -257,89 +305,34 @@ def facebook_business_active_ad_accounts(business):
     return active_ad_accounts
 
 
-def process_ad_account_requests(active_ad_accounts, date_preset):
+def run_async_jobs(jobs, job_fn, *args, **kwargs):
     """
-    This function returns a list of facebook.adobject.adreportrun objects for each ad account given.
+    Runs a list of jobs asynchronously using a thread pool executor.
 
     Parameters:
-        - active_ad_accounts (list): A list of objects representing the active Facebook Ad accounts.
-        - date_preset (str): The date preset to use while retrieving insights data.
+        - jobs (iterable): An iterable of jobs to be run.
+        - job_fn (callable): A callable object that represents the job to be run.
+        - *args: Positional arguments to be passed to `job_fn`.
+        - **kwargs: Keyword arguments to be passed to `job_fn`.
 
     Returns:
-    A tuple with two elements:
-        - ad_reports (list): A list of reports, where each report is a facebook.adobject.adreportrun object.
-        - unsuccessful_request_futures (list): A list of unsuccessful request futures.
+        A tuple of two elements:
+            - results (list): A list of results, where each result is the return value of `job_fn` for a single job.
+            - failed_jobs (list): A list of jobs that failed to complete.
 
+    The function creates a `ThreadPoolExecutor` and submits a list of jobs to it, where each job is a call to `job_fn` with the corresponding job and any additional arguments passed in `*args` and `**kwargs`. The function then waits for all jobs to complete and collects the results, as well as any jobs that failed to complete. The results and failed jobs are returned as a tuple.
     """
-
-    ad_reports = []
-    unsuccessful_request_futures = []
-    fields = [
-        AdsInsights.Field.ad_name,
-        AdsInsights.Field.spend,
-        AdsInsights.Field.actions,
-        AdsInsights.Field.ad_id,
-        AdsInsights.Field.campaign_id,
-        AdsInsights.Field.adset_id,
-        AdsInsights.Field.account_id,
-        AdsInsights.Field.created_time,
-    ]
-    params = {
-        "level": "ad",
-        "date_preset": date_preset,
-        "filtering": [
-            {
-                "field": "ad.effective_status",
-                "operator": "IN",
-                "value": ["ACTIVE", "PAUSED", "ADSET_PAUSED", "CAMPAIGN_PAUSED"],
-            },
-        ],
-    }
+    results = []
+    failed_jobs = []
     with ThreadPoolExecutor() as executor:
-        jobs_queue = [executor.submit(create_async_job, account, fields, params) for account in active_ad_accounts]
-        for future in as_completed(jobs_queue):
+        job_futures = [executor.submit(job_fn, job, *args, **kwargs) for job in jobs]
+        for future in as_completed(job_futures):
             try:
                 result = future.result()
-                ad_reports.append(result)
+                results.append(result)
             except:
-                unsuccessful_request_futures.append(future)
-    return ad_reports, unsuccessful_request_futures
-
-
-def process_ad_reports(ad_reports):
-    """
-    Processes Facebook Ad reports.
-
-    Parameters:
-        - ad_reports (list): A list of Facebook AdReportRun objects.
-
-    Returns:
-        A tuple two elemetns
-            - ads (list): A list of ads, where each ad is a Facebook Ad object.
-            - unsuccessful_reports (list): A list of unsuccessful reports.
-
-    The function retrieves the results of the Facebook AdReportRun objects in `ad_reports` and adds the successful results to a list of Facebook Ad objects. If a report run is unsuccessful, it is added to a list of unsuccessful report runs. The function returns a tuple of the list of processed Facebook Ad objects and the list of unsuccessful report runs.
-    """
-    ads = []
-    unsuccessful_reports = []
-    with ThreadPoolExecutor() as executor:
-        results_queue = [executor.submit(wait_for_job, report) for report in ad_reports]
-        for future in as_completed(results_queue):
-            result = future.result()
-            try:
-                # TODO: I will need to decouple the following lines of code
-                if result[AdReportRun.Field.async_status].lower() == "job completed":
-                    account_id = result[AdReportRun.Field.account_id]
-                    cursor = result.get_result(params={"limit": 500})
-                    write_account_limits(cursor.headers())
-                    ads.extend(cursor)
-                    print(f"Account: {account_id} written")
-                else:
-                    unsuccessful_reports.append(result)
-            except Exception as e:
-                print({"error": e})
-                unsuccessful_reports.append(result)
-    return ads, unsuccessful_reports
+                failed_jobs.append(future)
+    return results, failed_jobs
 
 
 def write_account_limits(headers):
@@ -377,17 +370,6 @@ def create_async_job(account, fields, params):
 
 
 def wait_for_job(job):
-    """
-    Waits for the completion of a job submitted to the Facebook Ad Insights API.
-
-    Parameters:
-        - job (object): A facebook.adobject.adreportrun object representing the submitted job.
-
-    Returns:
-       A facebook.adobject.adreportfun object.
-
-    The function waits for the completion of the job submitted to the Facebook Ad Insights API.
-    """
     job = job.api_get()
     account_id = job["account_id"]
     print(f"Waiting for account: {account_id}")
