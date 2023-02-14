@@ -65,23 +65,16 @@ def get_clickup_list(client, team_name, space_name, list_name, folder_name=None)
 
 def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list, start_day_delta, end_day_delta):
     """
-    Retrieves appointment data from a given GHL client and task list.
+    Retrieve appointments from a GHL client based on location and calendar.
 
     Parameters:
-    - ghl_client (object): An object representing the GHL client.
-    - clickup_task_list (list): A list of tasks, where each task is a dictionary containing information about the task.
-    - start_day_delta (int): The number of days relative to the current date to use as the start date for retrieving appointments.
-    - end_day_delta (int): The number of days relative to the current date to use as the end date for retrieving appointments.
+        - ghl_client (object): An object representing a GHL client.
+        - clickup_task_list (list): A list of tasks from ClickUp.
+        - start_day_delta (int): The number of days before or after today to start retrieving appointments.
+        - end_day_delta (int): The number of days before or after today to end retrieving appointments.
 
     Returns:
-    A dictionary with the following format:
-    {
-        location['name']:{
-            calendar['name']:appointments
-        }
-    }
-
-    The dictionary maps the names of locations to a dictionary of calendars, where the calendars are associated with their respective appointments.
+        - appointment_data (dict): A dictionary containing appointments grouped by location and calendar.
     """
     appointment_params = {
         "startDate": datetime_to_epoch(generate_datetime_string(day_delta=start_day_delta)),
@@ -101,25 +94,17 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
 
 
 def custom_field_dict(custom_field_list):
+    # TODO: Abstract this
     """
-    Retrieves appointment data from a given GHL client and task list.
+    Create a dictionary of custom fields from a list of custom fields.
 
     Parameters:
-    - ghl_client (object): An object representing the GHL client.
-    - clickup_task_list (list): A list of tasks, where each task is a dictionary containing information about the task.
-    - start_day_delta (int): The number of days relative to the current date to use as the start date for retrieving appointments.
-    - end_day_delta (int): The number of days relative to the current date to use as the end date for retrieving appointments.
+        - custom_field_list (list): A list of clickup custom fields.
 
     Returns:
-    A dictionary with the following format:
-    {
-        location['name']:{
-            calendar['name']:appointments
-        }
-    }
-
-    The dictionary maps the names of locations to a dictionary of calendars, where the calendars are associated with their respective appointments.
+        - custom_field_dict (dict): A dictionary of custom fields where the keys are the names of the custom fields and the values are their corresponding ids.
     """
+
     custom_field_dict = {}
     for field in custom_field_list:
         custom_field_dict[field["name"]] = field["id"]
@@ -143,38 +128,45 @@ def get_custom_field_value(input_list, name):
     return None
 
 
-def facebook_data_organized_by_date_preset(business, date_presets, data_processor=None):
+def facebook_data_organized_by_date_preset(accounts, date_presets):
     """
-    Retrieves data at for a variety of date presets. Returns a dictionary of ad data with the following format. It is organized by date presets
+    Retrieves data for a variety of date presets for a Facebook business and returns the result organized by date preset.
 
-    return format = {
-       "date_preset":{
+    Parameters:
+        - accounts (list): A list of facebook AdAccount objects to query data from.
+        - date_presets (list): A list of date presets to use when generating ad reports.
 
-    }
+    Returns:
+        - data (dict): A dictionary containing the following keys:
+        - date_preset: a string representing the date preset used when generating ad reports.
+            - "unsuccessful_reports": a list of ad reports that could not be processed.
+            - "unsuccessfully_written": a list of ad reports that could not be written to the list passed to process_report
+            - "unsuccessful_request_futures": a list of ad account requests that could not be processed.
+            - "uncompleted_report_futures": a list of ad report jobs that could not be completed.
+            - "data": the result of the ads
     """
-    ad_accounts = facebook_business_active_ad_accounts(business=business)
     data = {}
     for presets in date_presets:
-        data[presets] = facebook_ad_accounts_ad_data(ad_accounts, presets, data_processor)
+        data[presets] = facebook_ad_accounts_ad_data(accounts, presets)
     return data
 
 
-def facebook_ad_accounts_ad_data(ad_accounts, date_preset, data_processor):
+def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
+    # TODO: Encapulate this function into a class
     """
     Generates ad reports for a list of Facebook ad accounts, processes the data, and returns the result.
 
     Parameters:
         - ad_accounts (list): A list of Facebook ad accounts for which ad reports should be generated.
         - date_preset (str): A string representing the date preset to use when generating ad reports.
-        - data_processor (callable, optional): A callable object that will process the generated ad reports. If not provided, the processed ad reports will be stored in the returned dictionary under the key "data".
 
     Returns:
         - ret (dict): A dictionary containing the following keys:
-        - "unsuccessful_reports": a list of ad reports that could not be processed.
-        - "unsuccessfully_written": a list of ad reports that could not be written to the list passed to process_report
-        - "unsuccessful_request_futures": a list of ad account requests that could not be processed.
-        - "uncompleted_report_futures": a list of ad report jobs that could not be completed.
-        - "data": the result of calling data_processor on the generated ad reports, or the processed ads
+            - "unsuccessful_reports": a list of ad reports that could not be processed.
+            - "unsuccessful_writes": a list of ad reports that could not be written to the list passed to process_report
+            - "unsuccessful_request_futures": a list of ad account requests that could not be processed.
+            - "uncompleted_report_futures": a list of ad report jobs that could not be completed.
+            - "data": the result of the processed ads
     """
     insights_params = create_insights_params(date_preset)
     # generate list of ad reports using threads
@@ -185,21 +177,20 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset, data_processor):
     # TODO: Retry with the unsuccessful reports
     successful_reports, unsuccessful_reports = organize_reports(completed_reports)
     ads = []
-    successfully_written, unsuccessfully_written = run_async_jobs(successful_reports, proccess_report, ads)
+    _, unsuccessful_writes = run_async_jobs(successful_reports, proccess_report, ads)
     ret = {
         "unsuccessful_reports": unsuccessful_reports,
-        "unsuccessfully_written": unsuccessfully_written,
+        "unsuccessful_writes": unsuccessful_writes,
         "unsuccessful_request_futures": unsuccessful_request_futures,
         "uncompleted_report_futures": uncompleted_report_futures,
+        "data": ads,
     }
-    if data_processor is None:
-        ret["data"] = ads
-    else:
-        ret["data"] = data_processor(ads)
     return ret
 
 
-def create_insights_params(date_preset):
+def create_insights_params(
+    date_preset,
+):
     # ads the date_preset to the global DEFAULT_INSIGHTS_PARAMS object
     insights_params = copy.deepcopy(globals.DEFAULT_INSIGHTS_PARAMS)
     insights_params["date_preset"] = date_preset
@@ -207,11 +198,19 @@ def create_insights_params(date_preset):
 
 
 def proccess_report(report, list):
-    """I want the function to add the report results to a given list"""
+    """
+    Adds the results of a Facebook AdReportRun object to a given list.
+
+    Parameters:
+        - report (AdReportRun): A Facebook AdReportRun object.
+        - result_list (list): A list to which the report results will be added.
+
+    The function retrieves the results of the `report` parameter by calling `report.get_result` with a limit of 500 results. The account rate limit information is also written to `globals.RATE_LIMIT` by calling `write_account_limits` with the headers from the result cursor. The results are then added to `result_list` and a message is printed indicating the successful write.
+    """
     # TODO: I will want to implement try and except to catch facebook_errors
     cursor = report.get_result(params={"limit": 500})
     # write accounts rate limit to globals.RATE_LIMIT
-    write_account_limits(cursor.headers())
+    write_facebook_rate_limits(cursor.headers())
     list.extend(cursor)
     print(f"Account: {report[AdReportRun.Field.account_id]} written")
     return
@@ -238,11 +237,6 @@ def organize_reports(reports):
         report for report in reports if report[AdReportRun.Field.async_status].lower() != "job completed"
     ]
     return successful_reports, unsuccessful_reports
-
-
-def ads_retailer_id_processor(ads):
-    pattern = r"^\d{3}"
-    return facebook_data_organized_by_regex(ads, "ad_name", pattern)
 
 
 def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
@@ -335,21 +329,27 @@ def run_async_jobs(jobs, job_fn, *args, **kwargs):
     return results, failed_jobs
 
 
-def write_account_limits(headers):
+def write_facebook_rate_limits(facebook_headers):
     """
-    Writes account usage information to the global `FB_RATES` dictionary.
+    Write the Facebook rate limit information to a global dictionary.
 
     Parameters:
-    - headers (dict): A dictionary containing header information, including the key "x-business-use-case-usage" with a JSON-encoded string value representing account usage information.
+        - facebook_headers (dict): A dictionary of headers from a Facebook API response.
 
     Returns:
-    - None
-
-    The function extracts the account usage information from the headers and writes it to the `FB_RATES` dictionary, where the keys are account IDs and the values are the usage information for each account.
+        - None
     """
-    account_info = json.loads(headers["x-business-use-case-usage"])
-    for account_id in account_info.keys():
-        globals.FB_RATES[account_id] = account_info[account_id]
+    # list(globals.FACEBOOK_RATES.keys()) to edit while iterating dict keys
+    for facebook_rate_signifiers in list(globals.FACEBOOK_RATES.keys()):
+        if facebook_rate_signifiers in facebook_headers.keys():
+            if facebook_rate_signifiers == "x-business-use-case-usage":
+                account_info = json.loads(facebook_headers["x-business-use-case-usage"])
+                for account_id in account_info.keys():
+                    globals.FACEBOOK_RATES[account_id] = account_info[account_id]
+            else:
+                globals.FACEBOOK_RATES[facebook_rate_signifiers] = json.loads(
+                    facebook_headers[facebook_rate_signifiers]
+                )
 
 
 def create_async_job(account, fields, params):
@@ -370,6 +370,17 @@ def create_async_job(account, fields, params):
 
 
 def wait_for_job(job):
+    """
+    Waits for a Facebook AdReportRun job to complete and returns the results.
+
+    Parameters:
+        - job (AdReportRun): A Facebook AdReportRun object representing the job to wait for.
+
+    Returns:
+        A Facebook AdReportRun object representing the completed job, including the results.
+
+    The function retrieves the status of the job every 10 seconds until the job is marked as complete or failed. If the job fails, the current status of the job is returned. If the job is successful, the function retrieves the final result of the job and returns it.
+    """
     job = job.api_get()
     account_id = job["account_id"]
     print(f"Waiting for account: {account_id}")
@@ -423,3 +434,41 @@ def write_to_csv(objects, filename, fieldnames=None, default=None):
         for obj in objects:
             row = {field: obj.get(field, default) for field in fieldnames}
             writer.writerow(row)
+
+
+def ads_with_issues(accounts, target_key=None, regex_pattern=None):
+    """
+    Retrieve advertisements with issues and organize the data.
+
+    Parameters:
+        - accounts (list): A list of Facebook account objects.
+        - target_key (str, optional): The key to target when organizing the data.
+        - regex_pattern (str, optional): The pattern to use when organizing the data with the target_key.
+
+    Returns:
+        - ret (dict): A dictionary containing the data and unsuccessful requests.
+        - data (list or dict): A list of advertisements or a dictionary organized by a regex pattern based on the target_key.
+        - unsuccessful_request (list): A list of unsuccessful requests.
+    """
+    ret = {}
+    successful_requests, unsuccessful_request = run_async_jobs(
+        accounts, request_issues, globals.ISSUES_FIELDS_PARAMS["fields"], globals.ISSUES_FIELDS_PARAMS["params"]
+    )
+    ads = []
+    for lists in successful_requests:
+        ads.extend(lists)
+    if target_key and regex_pattern:
+        ret["data"] = facebook_data_organized_by_regex(ads, target_key, regex_pattern)
+    else:
+        ret["data"] = ads
+    ret["unsuccessful_request"] = unsuccessful_request
+    return ret
+
+
+def request_issues(account, fields, params):
+    account_id = account["id"]
+    print(f"Requesting Issues for account: {account_id}")
+    issues = account.get_ads(fields=fields, params=params)
+    write_facebook_rate_limits(issues.headers())
+    print(f"Issues for account {account_id}")
+    return issues
