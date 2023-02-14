@@ -20,8 +20,19 @@ def datetime_to_epoch(datetime_string):
 
 
 def generate_datetime_string(day_delta):
+    """
+    Generate a datetime string representing a target date.
+
+    Parameters:
+        - day_delta (int): The number of days before or after today to generate the target date.
+
+    Returns:
+        - datetime_string (str): A string representation of the target date in the format 'YYYY-MM-DD HH:MM:SS'."""
     target_date = datetime.now() + timedelta(days=day_delta)
-    return target_date.strftime("%Y-%m-%d %H:%M:%S")
+    if day_delta >= 0:
+        return target_date.strftime("%Y-%m-%d 23:59:59")
+    else:
+        return target_date.strftime("%Y-%m-%d 00:00:00")
 
 
 def get_clickup_list(client, team_name, space_name, list_name, folder_name=None):
@@ -65,7 +76,7 @@ def get_clickup_list(client, team_name, space_name, list_name, folder_name=None)
 
 def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list, start_day_delta, end_day_delta):
     """
-    Retrieve appointments from a GHL client based on location and calendar.
+    Retrieve appointments from GHL client based on location and calendar.
 
     Parameters:
         - ghl_client (object): An object representing a GHL client.
@@ -74,8 +85,10 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
         - end_day_delta (int): The number of days before or after today to end retrieving appointments.
 
     Returns:
-        - appointment_data (dict): A dictionary containing appointments grouped by location and calendar.
+        - appointment_data (dict): A dictionary containing appointments grouped by location, where the key is the location's id and the value is a dictionary with appointments information.
     """
+    # TODO: Decouple checking if the location id matches tasks custom fields
+    # TODO: implement threading somehow
     appointment_params = {
         "startDate": datetime_to_epoch(generate_datetime_string(day_delta=start_day_delta)),
         "endDate": datetime_to_epoch(generate_datetime_string(day_delta=end_day_delta)),
@@ -86,10 +99,10 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
         for task in clickup_task_list:
             if location["id"] == get_custom_field_value(input_list=task["custom_fields"], name="Location ID"):
                 calendars = location.get_calendar_services()
-                appointment_data[location["name"]] = {}
+                appointment_data[location["id"]] = {"appointments": []}
                 for calendar in calendars:
                     appointments = calendar.get_appointments(params=appointment_params)
-                    appointment_data[location["name"]][calendar["name"]] = appointments
+                    appointment_data[location["id"]]["appointments"].extend(appointments)
     return appointment_data
 
 
@@ -436,7 +449,7 @@ def write_to_csv(objects, filename, fieldnames=None, default=None):
             writer.writerow(row)
 
 
-def ads_with_issues(accounts, target_key=None, regex_pattern=None):
+def ads_with_issues(accounts):
     """
     Retrieve advertisements with issues and organize the data.
 
@@ -457,10 +470,7 @@ def ads_with_issues(accounts, target_key=None, regex_pattern=None):
     ads = []
     for lists in successful_requests:
         ads.extend(lists)
-    if target_key and regex_pattern:
-        ret["data"] = facebook_data_organized_by_regex(ads, target_key, regex_pattern)
-    else:
-        ret["data"] = ads
+    ret["data"] = ads
     ret["unsuccessful_request"] = unsuccessful_request
     return ret
 
