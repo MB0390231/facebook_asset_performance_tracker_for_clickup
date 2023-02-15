@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adsinsights import AdsInsights
+from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 import time, json, re, globals, copy, csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,7 +28,7 @@ def generate_datetime_string(day_delta):
         - day_delta (int): The number of days before or after today to generate the target date.
 
     Returns:
-        - datetime_string (str): A string representation of the target date in the format 'YYYY-MM-DD HH:MM:SS'."""
+        - datetime_string (str): A string representation of the target date in the format "YYYY-MM-DD HH:MM:SS"."""
     target_date = datetime.now() + timedelta(days=day_delta)
     if day_delta >= 0:
         return target_date.strftime("%Y-%m-%d 23:59:59")
@@ -164,43 +165,6 @@ def facebook_data_organized_by_date_preset(accounts, date_presets):
     return data
 
 
-def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
-    # TODO: Encapulate this function into a class
-    """
-    Generates ad reports for a list of Facebook ad accounts, processes the data, and returns the result.
-
-    Parameters:
-        - ad_accounts (list): A list of Facebook ad accounts for which ad reports should be generated.
-        - date_preset (str): A string representing the date preset to use when generating ad reports.
-
-    Returns:
-        - ret (dict): A dictionary containing the following keys:
-            - "unsuccessful_reports": a list of ad reports that could not be processed.
-            - "unsuccessful_writes": a list of ad reports that could not be written to the list passed to process_report
-            - "unsuccessful_request_futures": a list of ad account requests that could not be processed.
-            - "uncompleted_report_futures": a list of ad report jobs that could not be completed.
-            - "data": the result of the processed ads
-    """
-    insights_params = create_insights_params(date_preset)
-    # generate list of ad reports using threads
-    succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
-        ad_accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
-    )
-    completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
-    # TODO: Retry with the unsuccessful reports
-    successful_reports, unsuccessful_reports = organize_reports(completed_reports)
-    ads = []
-    _, unsuccessful_writes = run_async_jobs(successful_reports, proccess_report, ads)
-    ret = {
-        "unsuccessful_reports": unsuccessful_reports,
-        "unsuccessful_writes": unsuccessful_writes,
-        "unsuccessful_request_futures": unsuccessful_request_futures,
-        "uncompleted_report_futures": uncompleted_report_futures,
-        "data": ads,
-    }
-    return ret
-
-
 def create_insights_params(
     date_preset,
 ):
@@ -286,6 +250,71 @@ def extract_regex_expression(string, expression):
         return None
 
 
+# TODO: Encapulate this function into a class
+def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
+    """
+    Parameters:
+    - ad_accounts (list): A list of Facebook ad account objects.
+    - date_preset (str): The date preset to use for retrieving ad account information.
+
+    Returns:
+        - ret (dict): A dictionary containing information about the ad account information retrieval process.
+        The keys of the dictionary are:
+            - "successful_reports": A list of successful reports for the ad accounts.
+            - "unsuccessful_reports": A list of unsuccessful reports for the ad accounts.
+            - "unsuccessful_request_futures": A list of futures representing unsuccessful requests.
+            - "uncompleted_report_futures": A list of futures representing uncompleted reports.
+            - "ads_data": A list of ad data for the ad accounts.
+            - "unsuccessful_writes": A list of unsuccessful writes to process the ad data.
+    """
+    reports = create_reports(ad_accounts, date_preset)
+    retry_accounts = [AdAccount(f"act_{report['account_id']}") for report in reports["unsuccessful_reports"]]
+    retry_reports = create_reports(retry_accounts, date_preset)
+    # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
+    del reports["unsuccessful_reports"]
+    merged = merge_dicts(reports, retry_reports)
+
+    ads = []
+    # TODO: check write errors
+    _, unsuccessful_writes = run_async_jobs(merged["successful_reports"], proccess_report, ads)
+    merged["ads_data"] = ads
+    merged["unsuccesful_writes"] = unsuccessful_writes
+    return merged
+
+
+def create_reports(ad_accounts, date_preset):
+    """
+    Create reports for multiple ad accounts.
+
+    Parameters:
+        - ad_accounts (list): A list of ad accounts to create reports for.
+        - date_preset (str): The date preset to use when creating the reports.
+
+    Returns:
+        - ret (dict): A dictionary containing information about the report creation process.
+        The keys of the dictionary are:
+        - "successful_reports":A list of reports that were successful.
+        - "unsuccessful_reports": A list of reports that were not successful.
+        - "unsuccessful_request_futures": A list of futures that resulted in an unsuccessful request.
+        - "uncompleted_report_futures": A list of futures that have not yet completed.
+    """
+    insights_params = create_insights_params(date_preset)
+    # generate list of ad reports using threads
+    # TODO: implement a way to check futures errors
+    succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
+        ad_accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
+    )
+    completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
+    successful_reports, unsuccessful_reports = organize_reports(completed_reports)
+    ret = {
+        "successful_reports": successful_reports,
+        "unsuccessful_reports": unsuccessful_reports,
+        "unsuccessful_request_futures": unsuccessful_request_futures,
+        "uncompleted_report_futures": uncompleted_report_futures,
+    }
+    return ret
+
+
 def facebook_business_active_ad_accounts(business):
     """
     Returns a list of active Facebook ad accounts associated with a given business.
@@ -310,6 +339,81 @@ def facebook_business_active_ad_accounts(business):
         if accounts["account_status"] == 1 and accounts["id"] not in alread_added:
             active_ad_accounts.append(accounts)
     return active_ad_accounts
+
+
+def ads_with_issues(accounts):
+    """
+    Retrieve advertisements with issues and organize the data.
+
+    Parameters:
+        - accounts (list): A list of Facebook account objects.
+        - target_key (str, optional): The key to target when organizing the data.
+        - regex_pattern (str, optional): The pattern to use when organizing the data with the target_key.
+
+    Returns:
+        - ret (dict): A dictionary containing the data and unsuccessful requests.
+        - data (list or dict): A list of advertisements or a dictionary organized by a regex pattern based on the target_key.
+        - unsuccessful_request (list): A list of unsuccessful requests.
+    """
+    ret = {}
+    successful_requests, unsuccessful_request = run_async_jobs(
+        accounts, request_issues, globals.ISSUES_FIELDS_PARAMS["fields"], globals.ISSUES_FIELDS_PARAMS["params"]
+    )
+    ads = []
+    for lists in successful_requests:
+        ads.extend(lists)
+    ret["data"] = ads
+    ret["unsuccessful_request"] = unsuccessful_request
+    return ret
+
+
+# def retry_failed_reports(failed_reports, reuse_list, date_preset):
+#     """
+#     This function runs through a list failed ad reports, creates a new report for the report["account_id"],
+#     and if the new report is successful it retrieves the data and adds it to the reuse_list
+#     """
+#     accounts = [AdAccount(f"act" + report["account_id"]) for report in failed_reports]
+#     insights_params = create_insights_params(date_preset)
+#     succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
+#         accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
+#     )
+
+#     # generate list of ad reports using threads
+#     completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
+#     successful_reports, unsuccessful_reports = organize_reports(completed_reports)
+#     _, unsuccessful_writes = run_async_jobs(successful_reports, proccess_report, reuse_list)
+#     ret = {
+#         "retry_data": {
+#             "unsuccessful_reports": unsuccessful_reports,
+#             "unsuccessful_writes": unsuccessful_writes,
+#             "unsuccessful_request_futures": unsuccessful_request_futures,
+#             "uncompleted_report_futures": uncompleted_report_futures,
+#         }
+#     }
+#     return ret
+
+
+def write_facebook_rate_limits(facebook_headers):
+    """
+    Write the Facebook rate limit information to a global dictionary.
+
+    Parameters:
+        - facebook_headers (dict): A dictionary of headers from a Facebook API response.
+
+    Returns:
+        - None
+    """
+    # list(globals.FACEBOOK_RATES.keys()) to edit while iterating dict keys
+    for facebook_rate_signifiers in list(globals.FACEBOOK_RATES.keys()):
+        if facebook_rate_signifiers in facebook_headers.keys():
+            if facebook_rate_signifiers == "x-business-use-case-usage":
+                account_info = json.loads(facebook_headers["x-business-use-case-usage"])
+                for account_id in account_info.keys():
+                    globals.FACEBOOK_RATES[account_id] = account_info[account_id]
+            else:
+                globals.FACEBOOK_RATES[facebook_rate_signifiers] = json.loads(
+                    facebook_headers[facebook_rate_signifiers]
+                )
 
 
 def run_async_jobs(jobs, job_fn, *args, **kwargs):
@@ -340,29 +444,6 @@ def run_async_jobs(jobs, job_fn, *args, **kwargs):
             except:
                 failed_jobs.append(future)
     return results, failed_jobs
-
-
-def write_facebook_rate_limits(facebook_headers):
-    """
-    Write the Facebook rate limit information to a global dictionary.
-
-    Parameters:
-        - facebook_headers (dict): A dictionary of headers from a Facebook API response.
-
-    Returns:
-        - None
-    """
-    # list(globals.FACEBOOK_RATES.keys()) to edit while iterating dict keys
-    for facebook_rate_signifiers in list(globals.FACEBOOK_RATES.keys()):
-        if facebook_rate_signifiers in facebook_headers.keys():
-            if facebook_rate_signifiers == "x-business-use-case-usage":
-                account_info = json.loads(facebook_headers["x-business-use-case-usage"])
-                for account_id in account_info.keys():
-                    globals.FACEBOOK_RATES[account_id] = account_info[account_id]
-            else:
-                globals.FACEBOOK_RATES[facebook_rate_signifiers] = json.loads(
-                    facebook_headers[facebook_rate_signifiers]
-                )
 
 
 def create_async_job(account, fields, params):
@@ -449,33 +530,26 @@ def write_to_csv(objects, filename, fieldnames=None, default=None):
             writer.writerow(row)
 
 
-def ads_with_issues(accounts):
-    """
-    Retrieve advertisements with issues and organize the data.
-
-    Parameters:
-        - accounts (list): A list of Facebook account objects.
-        - target_key (str, optional): The key to target when organizing the data.
-        - regex_pattern (str, optional): The pattern to use when organizing the data with the target_key.
-
-    Returns:
-        - ret (dict): A dictionary containing the data and unsuccessful requests.
-        - data (list or dict): A list of advertisements or a dictionary organized by a regex pattern based on the target_key.
-        - unsuccessful_request (list): A list of unsuccessful requests.
-    """
-    ret = {}
-    successful_requests, unsuccessful_request = run_async_jobs(
-        accounts, request_issues, globals.ISSUES_FIELDS_PARAMS["fields"], globals.ISSUES_FIELDS_PARAMS["params"]
-    )
-    ads = []
-    for lists in successful_requests:
-        ads.extend(lists)
-    ret["data"] = ads
-    ret["unsuccessful_request"] = unsuccessful_request
-    return ret
+def merge_dicts(dict1, dict2):
+    combined_dict = {}
+    keys = set([*dict1.keys(), *dict2.keys()])
+    for key in keys:
+        combined_dict[key] = dict1.get(key, []) + dict2.get(key, [])
+    return combined_dict
 
 
 def request_issues(account, fields, params):
+    """
+    Retrieve advertising issues from a Facebook account.
+
+    Parameters:
+        - account (dict): A dictionary containing information about a Facebook account.
+        - fields (str): A string representing the fields to be included in the request.
+        - params (dict): A dictionary containing parameters for the request.
+
+    Returns:
+        - issues (object): An object representing the issues retrieved from the Facebook account.
+    """
     account_id = account["id"]
     print(f"Requesting Issues for account: {account_id}")
     issues = account.get_ads(fields=fields, params=params)
