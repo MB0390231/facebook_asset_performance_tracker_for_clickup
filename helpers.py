@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import pytz
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.adaccount import AdAccount
@@ -34,6 +35,42 @@ def generate_datetime_string(day_delta):
         return target_date.strftime("%Y-%m-%d 23:59:59")
     else:
         return target_date.strftime("%Y-%m-%d 00:00:00")
+
+
+def count_appointments(appointments):
+    """
+    This function counts the number of appointments that were created in the past 7 days and the appointments that are in the future.
+    The appointments that were created in the past 7 days (not including today) are stored in a list with key "APPT 7".
+    The appointments that are in the future are stored in a list with key "APPT FUT".
+
+    Args:
+    appointments: list of dictionaries. Each dictionary represents a single appointment and contains the following keys:
+        "appoinmentStatus": string value indicating the status of the appointment.
+        "startTime": string value indicating the start time of the appointment in the format "%Y-%m-%d".
+        "createdAt": string value indicating the creation time of the appointment in the format "%Y-%m-%d".
+
+    Returns:
+    dictionary: containing two keys: "APPT 7" and "APPT FUT". Each key contains a list of appointments that meet the criteria described above.
+    """
+    current_time = datetime.now().date()
+    last_7d_appt = []
+    future_appt = []
+    seven_days_ago = current_time - timedelta(days=8)
+
+    for appointment in appointments:
+        if appointment["appoinmentStatus"] != "confirmed":
+            continue
+        start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
+        created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
+        if created_time >= seven_days_ago and created_time < current_time:
+            last_7d_appt.append(appointment)
+        if start_time > current_time:
+            future_appt.append(appointment)
+    ret = {
+        "APPT 7": last_7d_appt,
+        "APPT FUT": future_appt,
+    }
+    return ret
 
 
 def get_clickup_list(client, team_name, space_name, list_name, folder_name=None):
@@ -100,10 +137,10 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
         for task in clickup_task_list:
             if location["id"] == get_custom_field_value(input_list=task["custom_fields"], name="Location ID"):
                 calendars = location.get_calendar_services()
-                appointment_data[location["id"]] = {"appointments": []}
+                appointment_data[location["id"]] = []
                 for calendar in calendars:
                     appointments = calendar.get_appointments(params=appointment_params)
-                    appointment_data[location["id"]]["appointments"].extend(appointments)
+                    appointment_data[location["id"]].extend(appointments)
     return appointment_data
 
 
@@ -269,6 +306,10 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
     """
     reports = create_reports(ad_accounts, date_preset)
     retry_accounts = [AdAccount(f"act_{report['account_id']}") for report in reports["unsuccessful_reports"]]
+    if retry_accounts:
+        print("Retrying creating reports for:")
+        for accounts in retry_accounts:
+            print(f"     {accounts['account_id']}")
     retry_reports = create_reports(retry_accounts, date_preset)
     # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
     del reports["unsuccessful_reports"]
@@ -367,32 +408,6 @@ def ads_with_issues(accounts):
     return ret
 
 
-# def retry_failed_reports(failed_reports, reuse_list, date_preset):
-#     """
-#     This function runs through a list failed ad reports, creates a new report for the report["account_id"],
-#     and if the new report is successful it retrieves the data and adds it to the reuse_list
-#     """
-#     accounts = [AdAccount(f"act" + report["account_id"]) for report in failed_reports]
-#     insights_params = create_insights_params(date_preset)
-#     succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
-#         accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
-#     )
-
-#     # generate list of ad reports using threads
-#     completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
-#     successful_reports, unsuccessful_reports = organize_reports(completed_reports)
-#     _, unsuccessful_writes = run_async_jobs(successful_reports, proccess_report, reuse_list)
-#     ret = {
-#         "retry_data": {
-#             "unsuccessful_reports": unsuccessful_reports,
-#             "unsuccessful_writes": unsuccessful_writes,
-#             "unsuccessful_request_futures": unsuccessful_request_futures,
-#             "uncompleted_report_futures": uncompleted_report_futures,
-#         }
-#     }
-#     return ret
-
-
 def write_facebook_rate_limits(facebook_headers):
     """
     Write the Facebook rate limit information to a global dictionary.
@@ -409,7 +424,7 @@ def write_facebook_rate_limits(facebook_headers):
             if facebook_rate_signifiers == "x-business-use-case-usage":
                 account_info = json.loads(facebook_headers["x-business-use-case-usage"])
                 for account_id in account_info.keys():
-                    globals.FACEBOOK_RATES[account_id] = account_info[account_id]
+                    globals.FACEBOOK_RATES[facebook_rate_signifiers][account_id] = account_info[account_id]
             else:
                 globals.FACEBOOK_RATES[facebook_rate_signifiers] = json.loads(
                     facebook_headers[facebook_rate_signifiers]
@@ -556,3 +571,19 @@ def request_issues(account, fields, params):
     write_facebook_rate_limits(issues.headers())
     print(f"Issues for account {account_id}")
     return issues
+
+
+def write_to_file(objects, filename):
+    """
+    Write objects to a file in JSON format.
+
+    Parameters:
+        - objects (list): A list of objects to write to a file.
+        - filename (str): The name of the file to write to.
+
+    Returns:
+        None
+    """
+    l = [objs._data for objs in objects]
+    with open(filename, "a") as f:
+        json.dump(l, f)
