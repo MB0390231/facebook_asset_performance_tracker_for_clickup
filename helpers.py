@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 import pytz
 from exceptions import ClickupObjectNotFound
-from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 import time, json, re, globals, copy, csv
@@ -12,10 +11,10 @@ def datetime_to_epoch(datetime_string):
     """Converts a datetime string to an epoch timestamp.
 
     Arguments:
-    datetime_string -- A string in the format "YYYY-MM-DD HH:MM:SS".
+        - datetime_string -- A string in the format "YYYY-MM-DD HH:MM:SS".
 
     Returns:
-    An integer representing the number of seconds elapsed since 1970-01-01 00:00:00 (the epoch).
+        - An integer representing the number of seconds elapsed since 1970-01-01 00:00:00 (the epoch).
     """
     datetime_obj = datetime.strptime(datetime_string, "%Y-%m-%d %H:%M:%S")
     return int(datetime_obj.timestamp() * 1000)
@@ -58,19 +57,44 @@ def count_appointments(appointments):
     seven_days_ago = current_time - timedelta(days=8)
 
     for appointment in appointments:
-        if appointment["appoinmentStatus"] != "confirmed":
-            continue
-        start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
-        created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
-        if created_time >= seven_days_ago and created_time < current_time:
-            last_7d_appt.append(appointment)
-        if start_time > current_time:
-            future_appt.append(appointment)
+        if appointment["appoinmentStatus"] == "confirmed":
+            start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
+            created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
+            if created_time >= seven_days_ago and created_time < current_time:
+                last_7d_appt.append(appointment)
+            if start_time > current_time:
+                future_appt.append(appointment)
     ret = {
         "APPT 7": last_7d_appt,
         "APPT FUT": future_appt,
     }
     return ret
+
+
+def create_ghl_jobs(task, custom_fields, appts):
+    """
+    Args:
+        - task (dict): A dictionary representing a single task.
+        - custom_fields (dict): A dictionary containing the custom fields information.
+        - appts (dict): A dictionary where the keys are location ids and the values are lists of appointments.
+
+    Returns:
+        - list: A list of tuples, where each tuple contains the task, custom field id, and value for the custom fields "APPT 7" and "APPT FUT".
+    """
+    # TODO: abstract and decouple this function
+    jobs = []
+    for custom_field in task["custom_fields"]:
+        # check if the custom field name is location_id
+        if custom_field["name"].lower() == "location id" and custom_field.get("value", None) is not None:
+            location_id = custom_field.get("value", None)
+            # check if the location id is in the appts dict
+            try:
+                data = count_appointments(appts[location_id])
+            except KeyError:
+                data = {"APPT 7": [], "APPT FUT": []}
+            jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
+            jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
+    return jobs
 
 
 def get_clickup_list(client, team_name, space_name, list_name, folder_name=None):
