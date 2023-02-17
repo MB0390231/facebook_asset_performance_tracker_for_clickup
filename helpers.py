@@ -71,10 +71,10 @@ def count_appointments(appointments):
     return ret
 
 
-def create_ghl_jobs(task, custom_fields, appts):
+def create_ghl_jobs(tasks, custom_fields, appts):
     """
     Args:
-        - task (dict): A dictionary representing a single task.
+        - tasks (list): A list of dictionaries, where each dictionary represents a single task.
         - custom_fields (dict): A dictionary containing the custom fields information.
         - appts (dict): A dictionary where the keys are location ids and the values are lists of appointments.
 
@@ -83,18 +83,80 @@ def create_ghl_jobs(task, custom_fields, appts):
     """
     # TODO: abstract and decouple this function
     jobs = []
-    for custom_field in task["custom_fields"]:
-        # check if the custom field name is location_id
-        if custom_field["name"].lower() == "location id" and custom_field.get("value", None) is not None:
-            location_id = custom_field.get("value", None)
-            # check if the location id is in the appts dict
-            try:
-                data = count_appointments(appts[location_id])
-            except KeyError:
-                data = {"APPT 7": [], "APPT FUT": []}
-            jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
-            jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
+    for task in tasks:
+        for custom_field in task["custom_fields"]:
+            # check if the custom field name is location_id
+            if custom_field["name"].lower() == "location id":  # and custom_field.get("value", None) is not None
+                location_id = custom_field.get("value", None)
+                # check if the location id is in the appts dict
+                try:
+                    data = count_appointments(appts[location_id])
+                # if the location id is not in the appts dict, set the data to an empty list
+                except KeyError:
+                    data = {"APPT 7": [], "APPT FUT": []}
+                    jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
+                    jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
     return jobs
+
+
+def process_clickup_jobs(clickup_client, jobs):
+    """
+    Executes a batch of jobs by updating custom fields in a task using a `ClickupClient` object.
+
+    Args:
+        clickup_client (object): A `ClickupClient` object with the class attributes `RATE_LIMIT_REMAINING` and `RATE_RESET`.
+        jobs (list): A list of tuples, where each tuple contains the task, custom field id, and value for the custom field.
+
+    Returns:
+        dict: A dictionary with the following keys:
+            - `failures` (list): A list of tuples, where each tuple represents a job that failed to execute.
+    """
+    complete = False
+    ret = {
+        "failures": [],
+    }
+    jobs_ran = 0
+    while not complete:
+        clickup_client.refresh_rate_limit()
+        rate = int(clickup_client.RATE_LIMIT_REMAINING)
+        # run jobs number of jobs equal to the rate limit
+        if jobs_ran + rate > len(jobs):
+            rate = len(jobs) - jobs_ran
+            complete = True
+        jobs_to_run = jobs[jobs_ran : jobs_ran + rate]
+        jobs_ran += rate
+        _, failure = run_async_jobs(jobs_to_run, run_clickup_field_job)
+        ret["failures"].extend(failure)
+        # wait until the rate limit is reset
+        rate_reset = float(clickup_client.RATE_RESET)
+        time.sleep(rate_reset - time.time())
+    return ret
+
+
+def run_clickup_field_job(job):
+    """
+    Update the custom field for a task in Clickup.
+
+    Args:
+    - job (tuple): A tuple containing the following elements:
+        - task (dict): A dictionary representing a task in Clickup.
+        - custom_field_id (str): The id of the custom field to update.
+        - value (str): The value to set the custom field to.
+
+    Returns:
+    - None
+
+    """
+    print(
+        f"Updating task {job[0]['name']} {job[0]['id']}"
+        + "\n  custom_field_id: "
+        + str(job[1])
+        + "\n  value: "
+        + str(job[2])
+        + "\n"
+    )
+    job[0].update_custom_field(custom_field_id=job[1], value=job[2])
+    return
 
 
 def get_clickup_list(client, team_name, space_name, list_name, folder_name=None):
