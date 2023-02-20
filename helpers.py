@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
-import pytz
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 import time, json, re, globals, copy, csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
+import sys
+import math
 
 
 def datetime_to_epoch(datetime_string):
@@ -71,7 +73,13 @@ def count_appointments(appointments):
     return ret
 
 
-def create_ghl_jobs(tasks, custom_fields, appts):
+def create_clickup_jobs(tasks, custom_fields, ghl_appointments, facebook_data):
+    appointment_jobs = create_ghl_clickup_field_jobs(tasks, custom_fields, ghl_appointments)
+    facebook_jobs = create_clickup_facebook_jobs(tasks, custom_fields, facebook_data)
+    return [*appointment_jobs, *facebook_jobs]
+
+
+def create_ghl_clickup_field_jobs(tasks, custom_fields, appts):
     """
     Args:
         - tasks (list): A list of dictionaries, where each dictionary represents a single task.
@@ -91,11 +99,50 @@ def create_ghl_jobs(tasks, custom_fields, appts):
                 # check if the location id is in the appts dict
                 try:
                     data = count_appointments(appts[location_id])
+                    jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
+                    jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
                 # if the location id is not in the appts dict, set the data to an empty list
                 except KeyError:
                     data = {"APPT 7": [], "APPT FUT": []}
-                    jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
-                    jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
+                    jobs.append((task, custom_fields["APPT 7"], None))
+                    jobs.append((task, custom_fields["APPT FUT"], None))
+
+    return jobs
+
+
+def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
+    jobs = []
+    skeleton = {
+        "date_preset": {"spend": None, "actions": {"lead": None, "purchase": None}},
+        "ads_with_issues": {},
+    }
+    for task in tasks:
+        for custom_field in task["custom_fields"]:
+            if custom_field["name"].lower() == "id":
+                retailer_id = custom_field.get("value", "")
+                last_3d = retailer_data["last_3d"].get(retailer_id, skeleton["date_preset"])
+                last_7d = retailer_data["last_7d"].get(retailer_id, skeleton["date_preset"])
+                last_30d = retailer_data["last_30d"].get(retailer_id, skeleton["date_preset"])
+                ads_with_issues = retailer_data.get(retailer_id, skeleton["ads_with_issues"])
+                jobs.extend(
+                    [
+                        (task, custom_fields["Spend 3"], last_3d.get("spend", None)),
+                        (task, custom_fields["Spend 7"], last_7d.get("spend", None)),
+                        (task, custom_fields["Spend 30"], last_30d.get("spend", None)),
+                        (task, custom_fields["Leads 3"], last_3d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["Leads 7"], last_7d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["Leads 30"], last_30d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["CPL 3"], last_3d.get("cpl", None)),
+                        (task, custom_fields["CPL 7"], last_7d.get("cpl", None)),
+                        (task, custom_fields["CPL 30"], last_30d.get("cpl", None)),
+                        (task, custom_fields["CPP 3"], last_3d.get("cpp", None)),
+                        (task, custom_fields["CPP 7"], last_7d.get("cpp", None)),
+                        (task, custom_fields["CPP 30"], last_30d.get("cpp", None)),
+                        (task, custom_fields["Issues"], len(ads_with_issues[retailer_id]))
+                        if ads_with_issues.get(retailer_id)
+                        else (task, custom_fields["Issues"], None),
+                    ]
+                )
     return jobs
 
 
@@ -126,10 +173,14 @@ def process_clickup_jobs(clickup_client, jobs):
         jobs_to_run = jobs[jobs_ran : jobs_ran + rate]
         jobs_ran += rate
         _, failure = run_async_jobs(jobs_to_run, run_clickup_field_job)
+        # print jobs ran and jobs left
+        print(f"Jobs ran: {jobs_ran}, Jobs left: {len(jobs) - jobs_ran}")
         ret["failures"].extend(failure)
         # wait until the rate limit is reset
         rate_reset = float(clickup_client.RATE_RESET)
         time.sleep(rate_reset - time.time())
+        time.sleep(rate_reset - time.time())
+
     return ret
 
 
@@ -147,14 +198,6 @@ def run_clickup_field_job(job):
     - None
 
     """
-    print(
-        f"Updating task {job[0]['name']} {job[0]['id']}"
-        + "\n  custom_field_id: "
-        + str(job[1])
-        + "\n  value: "
-        + str(job[2])
-        + "\n"
-    )
     job[0].update_custom_field(custom_field_id=job[1], value=job[2])
     return
 
@@ -355,6 +398,46 @@ def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
     return ret
 
 
+def consolidate_ad_stats(ads, target_key, regex_pattern):
+    """
+    Consolidates the statistics for a list of Facebook ad objects based on a regular expression pattern.
+
+    Parameters:
+        - ads (list): A list of Facebook ad objects.
+        - target_key (str): The key for the ad object that will be used to extract the retailer id using the regular expression pattern.
+        - regex_pattern (str): A regular expression pattern used to extract the retailer id from the target_key.
+
+    The function creates a defaultdict, `consolidated_stats`, where the keys are the retailer ids and the values are dictionaries with the keys "spend" and "actions". The total spend and actions for each ad object with the same retailer id are added to the corresponding retailer id in `consolidated_stats`. The function uses the `extract_regex_expression` function to extract the retailer id from the target_key of each ad object and uses the regular expression pattern provided in `regex_pattern`.
+    """
+    # just learned about defaultdicts, this is a great use case for them
+    consolidated_stats = defaultdict(lambda: {"spend": 0, "actions": {}})
+    pattern = re.compile(regex_pattern)
+    for ad in ads:
+        retailer_id = extract_regex_expression(ad.get(target_key), pattern)
+        if not retailer_id:
+            continue
+        consolidated_stats[retailer_id]["spend"] += float(ad.get("spend", 0))
+        actions = ad.get("actions", [])
+        for action in actions:
+            action_type = action.get("action_type")
+            if not action_type:
+                continue
+            if action_type not in consolidated_stats[retailer_id]["actions"]:
+                consolidated_stats[retailer_id]["actions"][action_type] = 0
+            consolidated_stats[retailer_id]["actions"][action_type] += int(action.get("value", 0))
+    for retailer_id, stats in consolidated_stats.items():
+        stats["cpl"] = safe_divide(stats["spend"], stats["actions"].get("lead", 0))
+        stats["cpp"] = safe_divide(stats["spend"], stats["actions"].get("purchase", 0))
+    return dict(consolidated_stats)
+
+
+def safe_divide(numerator, denominator):
+    try:
+        return numerator / denominator
+    except ZeroDivisionError:
+        return None
+
+
 def extract_regex_expression(string, expression):
     """
     Extracts a substring from `string` using a regular expression `expression`.
@@ -391,7 +474,10 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
             - "unsuccessful_writes": A list of unsuccessful writes to process the ad data.
     """
     reports = create_reports(ad_accounts, date_preset)
-    retry_accounts = [AdAccount(f"act_{report['account_id']}") for report in reports["unsuccessful_reports"]]
+    retry_accounts = [
+        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
+        for report in reports["unsuccessful_reports"]
+    ]
     if retry_accounts:
         print("Retrying creating reports for:")
         for accounts in retry_accounts:
@@ -488,7 +574,10 @@ def ads_with_issues(accounts):
     )
     ads = []
     for lists in successful_requests:
-        ads.extend(lists)
+        for ad in lists:
+            if ad["configured_status"] != "ACTIVE":
+                continue
+            ads.append(ad)
     ret["data"] = ads
     ret["unsuccessful_request"] = unsuccessful_request
     return ret
@@ -631,6 +720,11 @@ def write_to_csv(objects, filename, fieldnames=None, default=None):
             writer.writerow(row)
 
 
+def write_dicts_to_json(data, file_path):
+    with open(file_path, "w") as f:
+        json.dump(data, f, default=lambda x: x.export_all_data(), indent=4)
+
+
 def merge_dicts(dict1, dict2):
     combined_dict = {}
     keys = set([*dict1.keys(), *dict2.keys()])
@@ -657,19 +751,3 @@ def request_issues(account, fields, params):
     write_facebook_rate_limits(issues.headers())
     print(f"Issues for account {account_id}")
     return issues
-
-
-def write_to_file(objects, filename):
-    """
-    Write objects to a file in JSON format.
-
-    Parameters:
-        - objects (list): A list of objects to write to a file.
-        - filename (str): The name of the file to write to.
-
-    Returns:
-        None
-    """
-    l = [objs._data for objs in objects]
-    with open(filename, "a") as f:
-        json.dump(l, f)

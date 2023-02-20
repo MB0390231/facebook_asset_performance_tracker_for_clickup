@@ -1,6 +1,6 @@
 from facebook_business.adobjects.adsinsights import AdsInsights
 
-FACEBOOK_RATES = {"x-business-use-case-usage": None, "x-ad-account-usage": None, "x-app-usage": None}
+FACEBOOK_RATES = {"x-business-use-case-usage": {}, "x-ad-account-usage": {}, "x-app-usage": {}}
 DEFAULT_INSIGHTS_FIELDS = [
     AdsInsights.Field.ad_name,
     AdsInsights.Field.spend,
