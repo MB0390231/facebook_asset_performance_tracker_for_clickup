@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 import sys
 import math
+import csv
 
 
 def datetime_to_epoch(datetime_string):
@@ -111,11 +112,13 @@ def create_ghl_clickup_field_jobs(tasks, custom_fields, appts):
 
 
 def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
+    # I need to be able to create jobs for each retailer id one at a time
     jobs = []
     skeleton = {
         "date_preset": {"spend": None, "actions": {"lead": None, "purchase": None}},
         "ads_with_issues": {},
     }
+
     for task in tasks:
         for custom_field in task["custom_fields"]:
             if custom_field["name"].lower() == "id":
@@ -123,7 +126,9 @@ def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
                 last_3d = retailer_data["last_3d"].get(retailer_id, skeleton["date_preset"])
                 last_7d = retailer_data["last_7d"].get(retailer_id, skeleton["date_preset"])
                 last_30d = retailer_data["last_30d"].get(retailer_id, skeleton["date_preset"])
-                ads_with_issues = retailer_data.get(retailer_id, skeleton["ads_with_issues"])
+                # error with ads with issues
+
+                ads_with_issues = retailer_data["ads_with_issues"].get(retailer_id, skeleton["ads_with_issues"])
                 jobs.extend(
                     [
                         (task, custom_fields["Spend 3"], last_3d.get("spend", None)),
@@ -138,9 +143,7 @@ def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
                         (task, custom_fields["CPP 3"], last_3d.get("cpp", None)),
                         (task, custom_fields["CPP 7"], last_7d.get("cpp", None)),
                         (task, custom_fields["CPP 30"], last_30d.get("cpp", None)),
-                        (task, custom_fields["Issues"], len(ads_with_issues[retailer_id]))
-                        if ads_with_issues.get(retailer_id)
-                        else (task, custom_fields["Issues"], None),
+                        (task, custom_fields["Issues"], len(ads_with_issues)),
                     ]
                 )
     return jobs
@@ -179,8 +182,6 @@ def process_clickup_jobs(clickup_client, jobs):
         # wait until the rate limit is reset
         rate_reset = float(clickup_client.RATE_RESET)
         time.sleep(rate_reset - time.time())
-        time.sleep(rate_reset - time.time())
-
     return ret
 
 
@@ -528,6 +529,26 @@ def create_reports(ad_accounts, date_preset):
     return ret
 
 
+def log_report_errors(facebook_data):
+    """
+    Logs errors for reports that were not successful.
+
+    Parameters:
+        - reports (list): A list of reports that were not successful.
+    """
+    for date_presets in facebook_data["data"].keys():
+        if len(facebook_data["data"][date_presets]["unsuccessful_request_futures"]) > 0:
+            print(f"Unsuccessful requests for {date_presets}:")
+            for future in facebook_data["data"][date_presets]["unsuccessful_request_futures"]:
+                print(f"    {future.exception()}")
+            print("")
+        if len(facebook_data["data"][date_presets]["unsuccessful_reports"]) > 0:
+            print(f"Unsuccessful reports for {date_presets}:")
+            for report in facebook_data["data"][date_presets]["unsuccessful_reports"]:
+                print(f"    {report}")
+            print("")
+
+
 def facebook_business_active_ad_accounts(business):
     """
     Returns a list of active Facebook ad accounts associated with a given business.
@@ -649,7 +670,8 @@ def create_async_job(account, fields, params):
         An facebook.adobject.adreportrun object.
     """
     job = account.get_insights_async(fields=fields, params=params)
-    print(f"Created report for account: {account['id']}")
+    # TODO: use logging module
+    # print(f"Created report for account: {account['id']}")
     return job.api_get()
 
 
@@ -667,7 +689,8 @@ def wait_for_job(job):
     """
     job = job.api_get()
     account_id = job["account_id"]
-    print(f"Waiting for account: {account_id}")
+    # TODO: use logging module
+    # print(f"Waiting for account: {account_id}")
     while (
         job[AdReportRun.Field.async_percent_completion] < 100 or job[AdReportRun.Field.async_status] == "Job Running"
     ):
@@ -675,8 +698,8 @@ def wait_for_job(job):
             return job
         time.sleep(10)
         job = job.api_get()
-    string = f"ID:{account_id} Type:result"
-    print(string)
+    # string = f"ID:{account_id} Type:result"
+    # print(string)
     return job.api_get()
 
 
@@ -698,26 +721,88 @@ def count_objects(d):
     return count
 
 
-def write_to_csv(objects, filename, fieldnames=None, default=None):
+def write_all_data_to_csv(facebook_data, appointments):
+    for date_preset in facebook_data["data"]:
+        write_ads_to_csv(facebook_data["data"][date_preset]["ads_data"], f"uploads/{date_preset}.csv")
+    write_ads_with_issues_to_csv(facebook_data["ads_with_issues"]["data"], "uploads/ads_with_issues.csv")
+    write_appointments_to_csv(appointments, "uploads/appointments.csv")
+
+
+def write_appointments_to_csv(appointments, filename):
+    fieldsnames = set()
+    fieldsnames.add("location_id")
+    for appts in appointments.values():
+        for appt in appts:
+            fieldsnames.update(appt.keys())
+    with open(filename, "w", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=sorted(fieldsnames))
+        writer.writeheader()
+        for location_id, appointment in appointments.items():
+            for appt in appointment:
+                appt["location_id"] = location_id
+                writer.writerow(appt)
+
+
+def write_ads_to_csv(data, filename):
     """
-    Write a list of dictionaries to a CSV file.
+    Write ad data to a CSV file, with additional columns for extracted information.
 
     Parameters:
-        - data (list): A list of dictionaries where each dictionary represents a row in the CSV file.
-        - fieldnames (list): A list of field names that correspond to the keys in the dictionaries.
+        - data (list of dict): A list of dictionaries, where each dictionary represents ad data.
         - filename (str): The name of the CSV file to write to.
-        - default_value (str): A default value to use for dictionaries that do not have a key corresponding to one of the fieldnames.
 
-    The function writes the list of dictionaries in data to a CSV file named filename. The field names in the CSV file are specified in the fieldnames parameter. If a dictionary in data is missing a key corresponding to one of the fieldnames, the default_value is used instead. The function returns nothing.
+    Returns:
+        - None
+
+    The function extracts the retailer ID and creative ID from the ad name and adds them as new columns to the CSV file. The function also extracts the number of leads and purchases from the "actions" key in each ad's dictionary and adds them as new columns to the CSV file. All other data from the ad dictionaries is written to the CSV file as-is.
+
     """
-    if fieldnames is None:
-        fieldnames = set().union(*(obj.keys() for obj in objects))
-    with open(filename, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+    # use a set comprehension to get the keys from each dictionary
+    key_sets = [set(d.keys()) for d in data]
+    # use the union method to combine all of the key sets into a single set
+    unique_keys = set().union(*key_sets)
+    unique_keys.discard("actions")
+    unique_keys.add("leads")
+    unique_keys.add("purchases")
+    unique_keys.add("creative_id")
+    unique_keys.add("retailer_id")
+    fieldsnames = sorted(list(unique_keys))
+    with open(filename, "w", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldsnames)
         writer.writeheader()
-        for obj in objects:
-            row = {field: obj.get(field, default) for field in fieldnames}
+        for d in data:
+            row = d.export_all_data().copy()
+            row["retailer_id"] = extract_regex_expression(d["ad_name"], r"^\d{3}")
+            row["creative_id"] = extract_regex_expression(d["ad_name"], r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
+            if "actions" in d:
+                for a in d["actions"]:
+                    if a["action_type"] == "lead":
+                        row["leads"] = a["value"]
+                    if a["action_type"] == "purchase":
+                        row["purchases"] = a["value"]
+                del row["actions"]
             writer.writerow(row)
+
+
+def write_ads_with_issues_to_csv(data, filename):
+    fieldnames = set.union(*[set(d.keys()) for d in data])
+
+    with open("uploads/ads_with_issues.csv", "w", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for d in data:
+            writer.writerow(d.export_all_data())
+
+
+def upload_to_clickup(tasks):
+    uploads = ["ads_with_issues", "last_7d", "last_3d", "last_30d", "appointments"]
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    for task in tasks:
+        if task["name"] in uploads:
+            print("Uploading file to ClickUp: ", task["name"])
+            file = {"attachment": (f"{timestamp}.csv", open(f"uploads/{task['name']}.csv", "rb"))}
+            task.upload_file(file)
 
 
 def write_dicts_to_json(data, file_path):
