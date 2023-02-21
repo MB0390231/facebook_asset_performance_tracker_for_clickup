@@ -358,7 +358,8 @@ def proccess_report(report, list):
     # write accounts rate limit to globals.RATE_LIMIT
     write_facebook_rate_limits(cursor.headers())
     list.extend(cursor)
-    print(f"Account: {report[AdReportRun.Field.account_id]} written")
+    # TODO: log
+    # print(f"Account: {report[AdReportRun.Field.account_id]} written")
     return
 
 
@@ -833,8 +834,9 @@ def request_issues(account, fields, params):
         - issues (object): An object representing the issues retrieved from the Facebook account.
     """
     account_id = account["id"]
-    print(f"Requesting Issues for account: {account_id}")
+    # TODO: LOG
+    # print(f"Requesting Issues for account: {account_id}")
     issues = account.get_ads(fields=fields, params=params)
     write_facebook_rate_limits(issues.headers())
-    print(f"Issues for account {account_id}")
+    # print(f"Issues for account {account_id}")
     return issues
