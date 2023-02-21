@@ -181,7 +181,9 @@ def process_clickup_jobs(clickup_client, jobs):
         ret["failures"].extend(failure)
         # wait until the rate limit is reset
         rate_reset = float(clickup_client.RATE_RESET)
-        time.sleep(rate_reset - time.time())
+        sleep = rate_reset - time.time()
+        if sleep > 0:
+            time.sleep(rate_reset - time.time())
     return ret
 
 
