@@ -11,7 +11,7 @@ def main():
     FB_TOKEN = os.environ.get("FB_TOKEN")
     APP_ID = os.environ.get("APP_ID")
     BUSINESS_ID = os.environ.get("BUSINESS_ID")
-    GHL_KEY = os.environ.get("GHL_KEY")
+    GHL_KEY = os.environ.get("GHL_TOKEN")
     RGM_CLICKUP = ClickupClient.init(user_token=CLICKUP_TOKEN)
     LOGS = helpers.get_clickup_list(
         client=RGM_CLICKUP,
