@@ -33,7 +33,7 @@ def main():
 
     RGM = Agency(agency_token=GHL_KEY)
     APPOINTMENTS = helpers.get_ghl_appointments_by_location_and_calendar(
-        RGM, clickup_task_list=NS_TASKS, start_day_delta=-7, end_day_delta=60
+        RGM, clickup_task_list=NS_TASKS, start_day_delta=-30, end_day_delta=120
     )
 
     FACEBOOK_CLIENT = FacebookAdsApi.init(app_id=APP_ID, access_token=FB_TOKEN)
