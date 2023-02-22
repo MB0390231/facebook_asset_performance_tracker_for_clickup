@@ -5,9 +5,8 @@ from facebook_business.adobjects.adreportrun import AdReportRun
 import time, json, re, globals, copy, csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
-import sys
-import math
 import csv
+import pytz
 
 
 def datetime_to_epoch(datetime_string):
@@ -57,10 +56,11 @@ def count_appointments(appointments):
     current_time = datetime.now().date()
     last_7d_appt = []
     future_appt = []
-    seven_days_ago = current_time - timedelta(days=8)
+    seven_days_ago = current_time - timedelta(days=7)
 
     for appointment in appointments:
         if appointment["appoinmentStatus"] == "confirmed":
+            # must convert utc time to timezone time
             start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
             created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
             if created_time >= seven_days_ago and created_time < current_time:
@@ -262,6 +262,7 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
     appointment_params = {
         "startDate": datetime_to_epoch(generate_datetime_string(day_delta=start_day_delta)),
         "endDate": datetime_to_epoch(generate_datetime_string(day_delta=end_day_delta)),
+        "includeAll": True,
     }
     locations = ghl_client.get_locations()
     appointment_data = {}
@@ -272,6 +273,14 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
                 appointment_data[location["id"]] = []
                 for calendar in calendars:
                     appointments = calendar.get_appointments(params=appointment_params)
+                    # convert to timestamp
+                    for appointment in appointments:
+                        appointment["createdAt"] = convert_timestamp_to_timezone(
+                            appointment["createdAt"], appointment["selectedTimezone"]
+                        )
+                        appointment["startTime"] = convert_timestamp_to_timezone(
+                            appointment["startTime"], appointment["selectedTimezone"]
+                        )
                     appointment_data[location["id"]].extend(appointments)
     return appointment_data
 
@@ -675,7 +684,15 @@ def create_async_job(account, fields, params):
     job = account.get_insights_async(fields=fields, params=params)
     # TODO: use logging module
     # print(f"Created report for account: {account['id']}")
-    return job.api_get()
+    # this is wehre I am getting object not created errors
+    try:
+        job = job.api_get()
+    except Exception as e:
+        print(e.body())
+        time.sleep(1)
+        print("retrying")
+        job = job.api_get()
+    return job
 
 
 def wait_for_job(job):
@@ -840,3 +857,19 @@ def request_issues(account, fields, params):
     write_facebook_rate_limits(issues.headers())
     # print(f"Issues for account {account_id}")
     return issues
+
+
+def convert_timestamp_to_timezone(timestamp_str, timezone_str):
+    # Convert the timestamp string to a datetime object
+    dt = datetime.fromisoformat(timestamp_str)
+
+    # Get the timezone object for the desired timezone
+    tz = pytz.timezone(timezone_str)
+
+    # Convert the datetime object to the desired timezone
+    tz_dt = dt.astimezone(tz)
+
+    # Format the datetime object as a string
+    tz_dt_str = tz_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    return tz_dt_str
