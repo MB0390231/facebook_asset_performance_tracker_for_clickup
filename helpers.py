@@ -273,7 +273,7 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
                 appointment_data[location["id"]] = []
                 for calendar in calendars:
                     appointments = calendar.get_appointments(params=appointment_params)
-                    # convert to timestamp
+                    # convert timestamps to timezone of appointment
                     for appointment in appointments:
                         appointment["createdAt"] = convert_timestamp_to_timezone(
                             appointment["createdAt"], appointment["selectedTimezone"]
@@ -805,14 +805,20 @@ def write_ads_to_csv(data, filename):
             writer.writerow(row)
 
 
-def write_ads_with_issues_to_csv(data, filename):
-    fieldnames = set.union(*[set(d.keys()) for d in data])
+def get_creative_id(str):
+    return extract_regex_expression(str, r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
 
+
+def write_ads_with_issues_to_csv(data):
+    fieldnames = set.union(*[set(d.keys()) for d in data])
+    fieldnames.add("creative_id")
     with open("uploads/ads_with_issues.csv", "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for d in data:
-            writer.writerow(d.export_all_data())
+            row = d.export_all_data().copy()
+            row["creative_id"] = get_creative_id(d["name"])
+            writer.writerow(row)
 
 
 def upload_to_clickup(tasks):
@@ -861,15 +867,15 @@ def request_issues(account, fields, params):
 
 def convert_timestamp_to_timezone(timestamp_str, timezone_str):
     # Convert the timestamp string to a datetime object
-    dt = datetime.fromisoformat(timestamp_str)
+    date = datetime.fromisoformat(timestamp_str)
 
     # Get the timezone object for the desired timezone
-    tz = pytz.timezone(timezone_str)
+    time_zone = pytz.timezone(timezone_str)
 
     # Convert the datetime object to the desired timezone
-    tz_dt = dt.astimezone(tz)
+    time_zone_date = date.astimezone(time_zone)
 
     # Format the datetime object as a string
-    tz_dt_str = tz_dt.strftime("%Y-%m-%d %H:%M:%S")
+    time_zone_date_str = time_zone_date.strftime("%Y-%m-%d %H:%M:%S")
 
-    return tz_dt_str
+    return time_zone_date_str
