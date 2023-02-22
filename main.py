@@ -57,8 +57,8 @@ def main():
     CLICKUP_STATUS = helpers.process_clickup_jobs(RGM_CLICKUP, CLICKUP_JOBS)
 
     # upload data files to clickup
-    helpers.write_all_data_to_csv(FACEBOOK_DATA, APPOINTMENTS)
-    helpers.upload_to_clickup(LOGS)
+    # helpers.write_all_data_to_csv(FACEBOOK_DATA, APPOINTMENTS)
+    # helpers.upload_to_clickup(LOGS)
 
     helpers.log_report_errors(FACEBOOK_DATA)
     # run through all exceptions and print them

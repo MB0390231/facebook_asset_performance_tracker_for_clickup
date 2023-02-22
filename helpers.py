@@ -7,8 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 import csv
 import pytz
+import sys
+import math
 
 
+# DATETIME
 def datetime_to_epoch(datetime_string):
     """Converts a datetime string to an epoch timestamp.
 
@@ -36,6 +39,22 @@ def generate_datetime_string(day_delta):
         return target_date.strftime("%Y-%m-%d 23:59:59")
     else:
         return target_date.strftime("%Y-%m-%d 00:00:00")
+
+
+def convert_timestamp_to_timezone(timestamp_str, timezone_str):
+    # Convert the timestamp string to a datetime object
+    date = datetime.fromisoformat(timestamp_str)
+
+    # Get the timezone object for the desired timezone
+    time_zone = pytz.timezone(timezone_str)
+
+    # Convert the datetime object to the desired timezone
+    time_zone_date = date.astimezone(time_zone)
+
+    # Format the datetime object as a string
+    time_zone_date_str = time_zone_date.strftime("%Y-%m-%d %H:%M:%S")
+
+    return time_zone_date_str
 
 
 def count_appointments(appointments):
@@ -169,6 +188,7 @@ def process_clickup_jobs(clickup_client, jobs):
     while not complete:
         clickup_client.refresh_rate_limit()
         rate = int(clickup_client.RATE_LIMIT_REMAINING)
+        print(f"Rate limit remaining: {rate}")
         # run jobs number of jobs equal to the rate limit
         if jobs_ran + rate > len(jobs):
             rate = len(jobs) - jobs_ran
@@ -179,11 +199,14 @@ def process_clickup_jobs(clickup_client, jobs):
         # print jobs ran and jobs left
         print(f"Jobs ran: {jobs_ran}, Jobs left: {len(jobs) - jobs_ran}")
         ret["failures"].extend(failure)
+        if len(ret["failures"]) > 0:
+            print(f"Failures: {len(ret['failures'])}")
         # wait until the rate limit is reset
         rate_reset = float(clickup_client.RATE_RESET)
         sleep = rate_reset - time.time()
         if sleep > 0:
-            time.sleep(rate_reset - time.time())
+            print(f"Sleeping for {math.ceil(sleep)} seconds...")
+            sleep_and_print(math.ceil(sleep))
     return ret
 
 
@@ -865,17 +888,12 @@ def request_issues(account, fields, params):
     return issues
 
 
-def convert_timestamp_to_timezone(timestamp_str, timezone_str):
-    # Convert the timestamp string to a datetime object
-    date = datetime.fromisoformat(timestamp_str)
-
-    # Get the timezone object for the desired timezone
-    time_zone = pytz.timezone(timezone_str)
-
-    # Convert the datetime object to the desired timezone
-    time_zone_date = date.astimezone(time_zone)
-
-    # Format the datetime object as a string
-    time_zone_date_str = time_zone_date.strftime("%Y-%m-%d %H:%M:%S")
-
-    return time_zone_date_str
+def sleep_and_print(seconds):
+    """
+    Sleeps for the given number of seconds and prints the number of seconds passed after each second.
+    """
+    for i in range(1, seconds + 1):
+        time.sleep(1)
+        sys.stdout.write(f"\rSeconds passed: {i}")
+        sys.stdout.flush()
+    print("")
