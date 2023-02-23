@@ -2,13 +2,18 @@ from datetime import datetime, timedelta
 from exceptions import ClickupObjectNotFound
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
-import time, json, re, globals, copy, csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+import time
 import csv
 import pytz
 import sys
 import math
+import json
+import re
+import globals
+import copy
+import csv
 
 
 # DATETIME
@@ -57,115 +62,29 @@ def convert_timestamp_to_timezone(timestamp_str, timezone_str):
     return time_zone_date_str
 
 
-def count_appointments(appointments):
-    """
-    This function counts the number of appointments that were created in the past 7 days and the appointments that are in the future.
-    The appointments that were created in the past 7 days (not including today) are stored in a list with key "APPT 7".
-    The appointments that are in the future are stored in a list with key "APPT FUT".
-
-    Args:
-    appointments: list of dictionaries. Each dictionary represents a single appointment and contains the following keys:
-        "appoinmentStatus": string value indicating the status of the appointment.
-        "startTime": string value indicating the start time of the appointment in the format "%Y-%m-%d".
-        "createdAt": string value indicating the creation time of the appointment in the format "%Y-%m-%d".
-
-    Returns:
-    dictionary: containing two keys: "APPT 7" and "APPT FUT". Each key contains a list of appointments that meet the criteria described above.
-    """
-    current_time = datetime.now().date()
-    last_7d_appt = []
-    future_appt = []
-    seven_days_ago = current_time - timedelta(days=7)
-
-    for appointment in appointments:
-        if appointment["appoinmentStatus"] == "confirmed":
-            # must convert utc time to timezone time
-            start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
-            created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
-            if created_time >= seven_days_ago and created_time < current_time:
-                last_7d_appt.append(appointment)
-            if start_time > current_time:
-                future_appt.append(appointment)
-    ret = {
-        "APPT 7": last_7d_appt,
-        "APPT FUT": future_appt,
-    }
-    return ret
-
-
+# CLICKUP
 def create_clickup_jobs(tasks, custom_fields, ghl_appointments, facebook_data):
     appointment_jobs = create_ghl_clickup_field_jobs(tasks, custom_fields, ghl_appointments)
     facebook_jobs = create_clickup_facebook_jobs(tasks, custom_fields, facebook_data)
     return [*appointment_jobs, *facebook_jobs]
 
 
-def create_ghl_clickup_field_jobs(tasks, custom_fields, appts):
+def custom_field_dict(custom_field_list):
+    # TODO: Abstract this
     """
-    Args:
-        - tasks (list): A list of dictionaries, where each dictionary represents a single task.
-        - custom_fields (dict): A dictionary containing the custom fields information.
-        - appts (dict): A dictionary where the keys are location ids and the values are lists of appointments.
+    Create a dictionary of custom fields from a list of custom fields.
+
+    Parameters:
+        - custom_field_list (list): A list of clickup custom fields.
 
     Returns:
-        - list: A list of tuples, where each tuple contains the task, custom field id, and value for the custom fields "APPT 7" and "APPT FUT".
+        - custom_field_dict (dict): A dictionary of custom fields where the keys are the names of the custom fields and the values are their corresponding ids.
     """
-    # TODO: abstract and decouple this function
-    jobs = []
-    for task in tasks:
-        for custom_field in task["custom_fields"]:
-            # check if the custom field name is location_id
-            if custom_field["name"].lower() == "location id":  # and custom_field.get("value", None) is not None
-                location_id = custom_field.get("value", None)
-                # check if the location id is in the appts dict
-                try:
-                    data = count_appointments(appts[location_id])
-                    jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
-                    jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
-                # if the location id is not in the appts dict, set the data to an empty list
-                except KeyError:
-                    data = {"APPT 7": [], "APPT FUT": []}
-                    jobs.append((task, custom_fields["APPT 7"], None))
-                    jobs.append((task, custom_fields["APPT FUT"], None))
 
-    return jobs
-
-
-def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
-    # I need to be able to create jobs for each retailer id one at a time
-    jobs = []
-    skeleton = {
-        "date_preset": {"spend": None, "actions": {"lead": None, "purchase": None}},
-        "ads_with_issues": {},
-    }
-
-    for task in tasks:
-        for custom_field in task["custom_fields"]:
-            if custom_field["name"].lower() == "id":
-                retailer_id = custom_field.get("value", "")
-                last_3d = retailer_data["last_3d"].get(retailer_id, skeleton["date_preset"])
-                last_7d = retailer_data["last_7d"].get(retailer_id, skeleton["date_preset"])
-                last_30d = retailer_data["last_30d"].get(retailer_id, skeleton["date_preset"])
-                # error with ads with issues
-
-                ads_with_issues = retailer_data["ads_with_issues"].get(retailer_id, skeleton["ads_with_issues"])
-                jobs.extend(
-                    [
-                        (task, custom_fields["Spend 3"], last_3d.get("spend", None)),
-                        (task, custom_fields["Spend 7"], last_7d.get("spend", None)),
-                        (task, custom_fields["Spend 30"], last_30d.get("spend", None)),
-                        (task, custom_fields["Leads 3"], last_3d.get("actions", {}).get("lead", None)),
-                        (task, custom_fields["Leads 7"], last_7d.get("actions", {}).get("lead", None)),
-                        (task, custom_fields["Leads 30"], last_30d.get("actions", {}).get("lead", None)),
-                        (task, custom_fields["CPL 3"], last_3d.get("cpl", None)),
-                        (task, custom_fields["CPL 7"], last_7d.get("cpl", None)),
-                        (task, custom_fields["CPL 30"], last_30d.get("cpl", None)),
-                        (task, custom_fields["CPP 3"], last_3d.get("cpp", None)),
-                        (task, custom_fields["CPP 7"], last_7d.get("cpp", None)),
-                        (task, custom_fields["CPP 30"], last_30d.get("cpp", None)),
-                        (task, custom_fields["Issues"], len(ads_with_issues)),
-                    ]
-                )
-    return jobs
+    custom_field_dict = {}
+    for field in custom_field_list:
+        custom_field_dict[field["name"]] = field["id"]
+    return custom_field_dict
 
 
 def process_clickup_jobs(clickup_client, jobs):
@@ -205,6 +124,7 @@ def process_clickup_jobs(clickup_client, jobs):
         rate_reset = float(clickup_client.RATE_RESET)
         sleep = rate_reset - time.time()
         if sleep > 0:
+            # loading_bar(jobs_ran, len(jobs), time_to_sleep=math.ceil(sleep))
             print(f"Sleeping for {math.ceil(sleep)} seconds...")
             sleep_and_print(math.ceil(sleep))
     return ret
@@ -267,6 +187,70 @@ def get_clickup_list(client, team_name, space_name, list_name, folder_name=None)
     return ret_list
 
 
+def get_custom_field_value(input_list, name):
+    """
+    Retrieves the value for a given name from a list of objects.
+
+    Parameters:
+    - input_list (list): A list of objects, where each object is a dictionary containing information about the object.
+    - name (str): The name that you want to retrieve the value for.
+
+    Returns:
+    The value associated with the given name, or None if no matching name is found in the list.
+    """
+    for item in input_list:
+        if item["name"] == name:
+            return item.get("value")
+    return None
+
+
+def upload_to_clickup(tasks):
+    uploads = ["ads_with_issues", "last_7d", "last_3d", "last_30d", "appointments"]
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    for task in tasks:
+        if task["name"] in uploads:
+            print("Uploading file to ClickUp: ", task["name"])
+            file = {"attachment": (f"{timestamp}.csv", open(f"uploads/{task['name']}.csv", "rb"))}
+            task.upload_file(file)
+
+
+# GHL
+def count_appointments(appointments):
+    """
+    This function counts the number of appointments that were created in the past 7 days and the appointments that are in the future.
+    The appointments that were created in the past 7 days (not including today) are stored in a list with key "APPT 7".
+    The appointments that are in the future are stored in a list with key "APPT FUT".
+
+    Args:
+    appointments: list of dictionaries. Each dictionary represents a single appointment and contains the following keys:
+        "appoinmentStatus": string value indicating the status of the appointment.
+        "startTime": string value indicating the start time of the appointment in the format "%Y-%m-%d".
+        "createdAt": string value indicating the creation time of the appointment in the format "%Y-%m-%d".
+
+    Returns:
+    dictionary: containing two keys: "APPT 7" and "APPT FUT". Each key contains a list of appointments that meet the criteria described above.
+    """
+    current_time = datetime.now().date()
+    last_7d_appt = []
+    future_appt = []
+    seven_days_ago = current_time - timedelta(days=7)
+
+    for appointment in appointments:
+        if appointment["appoinmentStatus"] == "confirmed":
+            # must convert utc time to timezone time
+            start_time = datetime.strptime(appointment["startTime"][:10], "%Y-%m-%d").date()
+            created_time = datetime.strptime(appointment["createdAt"][:10], "%Y-%m-%d").date()
+            if created_time >= seven_days_ago and created_time < current_time:
+                last_7d_appt.append(appointment)
+            if start_time > current_time:
+                future_appt.append(appointment)
+    ret = {
+        "APPT 7": last_7d_appt,
+        "APPT FUT": future_appt,
+    }
+    return ret
+
+
 def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list, start_day_delta, end_day_delta):
     """
     Retrieve appointments from GHL client based on location and calendar.
@@ -298,49 +282,87 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
                     appointments = calendar.get_appointments(params=appointment_params)
                     # convert timestamps to timezone of appointment
                     for appointment in appointments:
-                        appointment["createdAt"] = convert_timestamp_to_timezone(
-                            appointment["createdAt"], appointment["selectedTimezone"]
-                        )
-                        appointment["startTime"] = convert_timestamp_to_timezone(
-                            appointment["startTime"], appointment["selectedTimezone"]
-                        )
+                        try:
+                            appointment["createdAt"] = convert_timestamp_to_timezone(
+                                appointment["createdAt"], appointment["selectedTimezone"]
+                            )
+                            appointment["startTime"] = convert_timestamp_to_timezone(
+                                appointment["startTime"], appointment["selectedTimezone"]
+                            )
+                        except KeyError:
+                            print("KeyError: ", appointment["id"])
                     appointment_data[location["id"]].extend(appointments)
     return appointment_data
 
 
-def custom_field_dict(custom_field_list):
-    # TODO: Abstract this
+def create_ghl_clickup_field_jobs(tasks, custom_fields, appts):
     """
-    Create a dictionary of custom fields from a list of custom fields.
-
-    Parameters:
-        - custom_field_list (list): A list of clickup custom fields.
+    Args:
+        - tasks (list): A list of dictionaries, where each dictionary represents a single task.
+        - custom_fields (dict): A dictionary containing the custom fields information.
+        - appts (dict): A dictionary where the keys are location ids and the values are lists of appointments.
 
     Returns:
-        - custom_field_dict (dict): A dictionary of custom fields where the keys are the names of the custom fields and the values are their corresponding ids.
+        - list: A list of tuples, where each tuple contains the task, custom field id, and value for the custom fields "APPT 7" and "APPT FUT".
     """
+    # TODO: abstract and decouple this function
+    jobs = []
+    for task in tasks:
+        for custom_field in task["custom_fields"]:
+            # check if the custom field name is location_id
+            if custom_field["name"].lower() == "location id":  # and custom_field.get("value", None) is not None
+                location_id = custom_field.get("value", None)
+                # check if the location id is in the appts dict
+                try:
+                    data = count_appointments(appts[location_id])
+                    jobs.append((task, custom_fields["APPT 7"], len(data["APPT 7"])))
+                    jobs.append((task, custom_fields["APPT FUT"], len(data["APPT FUT"])))
+                # if the location id is not in the appts dict, set the data to an empty list
+                except KeyError:
+                    data = {"APPT 7": [], "APPT FUT": []}
+                    jobs.append((task, custom_fields["APPT 7"], None))
+                    jobs.append((task, custom_fields["APPT FUT"], None))
 
-    custom_field_dict = {}
-    for field in custom_field_list:
-        custom_field_dict[field["name"]] = field["id"]
-    return custom_field_dict
+    return jobs
 
 
-def get_custom_field_value(input_list, name):
-    """
-    Retrieves the value for a given name from a list of objects.
+# FACEBOOK
+def create_clickup_facebook_jobs(tasks, custom_fields, retailer_data):
+    # I need to be able to create jobs for each retailer id one at a time
+    jobs = []
+    skeleton = {
+        "date_preset": {"spend": None, "actions": {"lead": None, "purchase": None}},
+        "ads_with_issues": {},
+    }
 
-    Parameters:
-    - input_list (list): A list of objects, where each object is a dictionary containing information about the object.
-    - name (str): The name that you want to retrieve the value for.
+    for task in tasks:
+        for custom_field in task["custom_fields"]:
+            if custom_field["name"].lower() == "id":
+                retailer_id = custom_field.get("value", "")
+                last_3d = retailer_data["last_3d"].get(retailer_id, skeleton["date_preset"])
+                last_7d = retailer_data["last_7d"].get(retailer_id, skeleton["date_preset"])
+                last_30d = retailer_data["last_30d"].get(retailer_id, skeleton["date_preset"])
+                # error with ads with issues
 
-    Returns:
-    The value associated with the given name, or None if no matching name is found in the list.
-    """
-    for item in input_list:
-        if item["name"] == name:
-            return item.get("value")
-    return None
+                ads_with_issues = retailer_data["ads_with_issues"].get(retailer_id, skeleton["ads_with_issues"])
+                jobs.extend(
+                    [
+                        (task, custom_fields["Spend 3"], last_3d.get("spend", None)),
+                        (task, custom_fields["Spend 7"], last_7d.get("spend", None)),
+                        (task, custom_fields["Spend 30"], last_30d.get("spend", None)),
+                        (task, custom_fields["Leads 3"], last_3d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["Leads 7"], last_7d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["Leads 30"], last_30d.get("actions", {}).get("lead", None)),
+                        (task, custom_fields["CPL 3"], last_3d.get("cpl", None)),
+                        (task, custom_fields["CPL 7"], last_7d.get("cpl", None)),
+                        (task, custom_fields["CPL 30"], last_30d.get("cpl", None)),
+                        (task, custom_fields["CPP 3"], last_3d.get("cpp", None)),
+                        (task, custom_fields["CPP 7"], last_7d.get("cpp", None)),
+                        (task, custom_fields["CPP 30"], last_30d.get("cpp", None)),
+                        (task, custom_fields["Issues"], len(ads_with_issues)),
+                    ]
+                )
+    return jobs
 
 
 def facebook_data_organized_by_date_preset(accounts, date_presets):
@@ -364,6 +386,63 @@ def facebook_data_organized_by_date_preset(accounts, date_presets):
     for presets in date_presets:
         data[presets] = facebook_ad_accounts_ad_data(accounts, presets)
     return data
+
+
+# TODO: Encapulate this function into a class
+def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
+    """
+    Parameters:
+    - ad_accounts (list): A list of Facebook ad account objects.
+    - date_preset (str): The date preset to use for retrieving ad account information.
+
+    Returns:
+        - ret (dict): A dictionary containing information about the ad account information retrieval process.
+        The keys of the dictionary are:
+            - "successful_reports": A list of successful reports for the ad accounts.
+            - "unsuccessful_reports": A list of unsuccessful reports for the ad accounts.
+            - "unsuccessful_request_futures": A list of futures representing unsuccessful requests.
+            - "uncompleted_report_futures": A list of futures representing uncompleted reports.
+            - "ads_data": A list of ad data for the ad accounts.
+            - "unsuccessful_writes": A list of unsuccessful writes to process the ad data.
+    """
+    reports = create_reports(ad_accounts, date_preset)
+    retry_accounts = [
+        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
+        for report in reports["unsuccessful_reports"]
+    ]
+    if retry_accounts:
+        print("Retrying creating reports for date preset {date_preset}:")
+        for accounts in retry_accounts:
+            print(f"    - {accounts['account_id']}")
+    retry_reports = create_reports(retry_accounts, date_preset)
+    for failure in retry_reports["unsuccessful_reports"]:
+        print(f"Failed to create report for account {failure['account_id']}")
+    # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
+    del reports["unsuccessful_reports"]
+    merged = merge_dicts(reports, retry_reports)
+
+    ads = []
+    # TODO: check write errors
+    _, unsuccessful_writes = run_async_jobs(merged["successful_reports"], proccess_report, ads)
+    merged["ads_data"] = ads
+    merged["unsuccesful_writes"] = unsuccessful_writes
+    return merged
+
+
+def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
+    """
+    filters a list of ad insights
+    """
+    ret = {}
+    pattern = re.compile(regex_pattern)
+    for obj in list_of_objs:
+        extracted = extract_regex_expression(obj[target_key], pattern)
+        if extracted:
+            if extracted not in ret.keys():
+                ret[extracted] = [obj]
+            else:
+                ret[extracted].append(obj)
+    return ret
 
 
 def create_insights_params(
@@ -418,22 +497,6 @@ def organize_reports(reports):
     return successful_reports, unsuccessful_reports
 
 
-def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
-    """
-    filters a list of ad insights
-    """
-    ret = {}
-    pattern = re.compile(regex_pattern)
-    for obj in list_of_objs:
-        extracted = extract_regex_expression(obj[target_key], pattern)
-        if extracted:
-            if extracted not in ret.keys():
-                ret[extracted] = [obj]
-            else:
-                ret[extracted].append(obj)
-    return ret
-
-
 def consolidate_ad_stats(ads, target_key, regex_pattern):
     """
     Consolidates the statistics for a list of Facebook ad objects based on a regular expression pattern.
@@ -467,123 +530,6 @@ def consolidate_ad_stats(ads, target_key, regex_pattern):
     return dict(consolidated_stats)
 
 
-def safe_divide(numerator, denominator):
-    try:
-        return numerator / denominator
-    except ZeroDivisionError:
-        return None
-
-
-def extract_regex_expression(string, expression):
-    """
-    Extracts a substring from `string` using a regular expression `expression`.
-
-    Parameters:
-        - string (str): The input string from which to extract a substring.
-        - expression (str): A string representing a regular expression that will be used to extract a substring from `string`.
-
-    Returns:
-        - match (str or None): If a match is found, the extracted substring is returned. Otherwise, `None` is returned.
-    """
-    match = re.search(expression, string)
-    if match:
-        return match.group()
-    else:
-        return None
-
-
-# TODO: Encapulate this function into a class
-def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
-    """
-    Parameters:
-    - ad_accounts (list): A list of Facebook ad account objects.
-    - date_preset (str): The date preset to use for retrieving ad account information.
-
-    Returns:
-        - ret (dict): A dictionary containing information about the ad account information retrieval process.
-        The keys of the dictionary are:
-            - "successful_reports": A list of successful reports for the ad accounts.
-            - "unsuccessful_reports": A list of unsuccessful reports for the ad accounts.
-            - "unsuccessful_request_futures": A list of futures representing unsuccessful requests.
-            - "uncompleted_report_futures": A list of futures representing uncompleted reports.
-            - "ads_data": A list of ad data for the ad accounts.
-            - "unsuccessful_writes": A list of unsuccessful writes to process the ad data.
-    """
-    reports = create_reports(ad_accounts, date_preset)
-    retry_accounts = [
-        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
-        for report in reports["unsuccessful_reports"]
-    ]
-    if retry_accounts:
-        print("Retrying creating reports for:")
-        for accounts in retry_accounts:
-            print(f"     {accounts['account_id']}")
-    retry_reports = create_reports(retry_accounts, date_preset)
-    # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
-    del reports["unsuccessful_reports"]
-    merged = merge_dicts(reports, retry_reports)
-
-    ads = []
-    # TODO: check write errors
-    _, unsuccessful_writes = run_async_jobs(merged["successful_reports"], proccess_report, ads)
-    merged["ads_data"] = ads
-    merged["unsuccesful_writes"] = unsuccessful_writes
-    return merged
-
-
-def create_reports(ad_accounts, date_preset):
-    """
-    Create reports for multiple ad accounts.
-
-    Parameters:
-        - ad_accounts (list): A list of ad accounts to create reports for.
-        - date_preset (str): The date preset to use when creating the reports.
-
-    Returns:
-        - ret (dict): A dictionary containing information about the report creation process.
-        The keys of the dictionary are:
-        - "successful_reports":A list of reports that were successful.
-        - "unsuccessful_reports": A list of reports that were not successful.
-        - "unsuccessful_request_futures": A list of futures that resulted in an unsuccessful request.
-        - "uncompleted_report_futures": A list of futures that have not yet completed.
-    """
-    insights_params = create_insights_params(date_preset)
-    # generate list of ad reports using threads
-    # TODO: implement a way to check futures errors
-    succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
-        ad_accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
-    )
-    completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
-    successful_reports, unsuccessful_reports = organize_reports(completed_reports)
-    ret = {
-        "successful_reports": successful_reports,
-        "unsuccessful_reports": unsuccessful_reports,
-        "unsuccessful_request_futures": unsuccessful_request_futures,
-        "uncompleted_report_futures": uncompleted_report_futures,
-    }
-    return ret
-
-
-def log_report_errors(facebook_data):
-    """
-    Logs errors for reports that were not successful.
-
-    Parameters:
-        - reports (list): A list of reports that were not successful.
-    """
-    for date_presets in facebook_data["data"].keys():
-        if len(facebook_data["data"][date_presets]["unsuccessful_request_futures"]) > 0:
-            print(f"Unsuccessful requests for {date_presets}:")
-            for future in facebook_data["data"][date_presets]["unsuccessful_request_futures"]:
-                print(f"    {future.exception()}")
-            print("")
-        if len(facebook_data["data"][date_presets]["unsuccessful_reports"]) > 0:
-            print(f"Unsuccessful reports for {date_presets}:")
-            for report in facebook_data["data"][date_presets]["unsuccessful_reports"]:
-                print(f"    {report}")
-            print("")
-
-
 def facebook_business_active_ad_accounts(business):
     """
     Returns a list of active Facebook ad accounts associated with a given business.
@@ -608,6 +554,26 @@ def facebook_business_active_ad_accounts(business):
         if accounts["account_status"] == 1 and accounts["id"] not in alread_added:
             active_ad_accounts.append(accounts)
     return active_ad_accounts
+
+
+def log_report_errors(facebook_data):
+    """
+    Logs errors for reports that were not successful.
+
+    Parameters:
+        - reports (list): A list of reports that were not successful.
+    """
+    for date_presets in facebook_data["data"].keys():
+        if len(facebook_data["data"][date_presets]["unsuccessful_request_futures"]) > 0:
+            print(f"Unsuccessful requests for {date_presets}:")
+            for future in facebook_data["data"][date_presets]["unsuccessful_request_futures"]:
+                print(f"    {future.exception()}")
+            print("")
+        if len(facebook_data["data"][date_presets]["unsuccessful_reports"]) > 0:
+            print(f"Unsuccessful reports for {date_presets}:")
+            for report in facebook_data["data"][date_presets]["unsuccessful_reports"]:
+                print(f"    {report}")
+            print("")
 
 
 def ads_with_issues(accounts):
@@ -639,6 +605,27 @@ def ads_with_issues(accounts):
     return ret
 
 
+def request_issues(account, fields, params):
+    """
+    Retrieve advertising issues from a Facebook account.
+
+    Parameters:
+        - account (dict): A dictionary containing information about a Facebook account.
+        - fields (str): A string representing the fields to be included in the request.
+        - params (dict): A dictionary containing parameters for the request.
+
+    Returns:
+        - issues (object): An object representing the issues retrieved from the Facebook account.
+    """
+    account_id = account["id"]
+    # TODO: LOG
+    # print(f"Requesting Issues for account: {account_id}")
+    issues = account.get_ads(fields=fields, params=params)
+    write_facebook_rate_limits(issues.headers())
+    # print(f"Issues for account {account_id}")
+    return issues
+
+
 def write_facebook_rate_limits(facebook_headers):
     """
     Write the Facebook rate limit information to a global dictionary.
@@ -660,6 +647,98 @@ def write_facebook_rate_limits(facebook_headers):
                 globals.FACEBOOK_RATES[facebook_rate_signifiers] = json.loads(
                     facebook_headers[facebook_rate_signifiers]
                 )
+
+
+def wait_for_job(job):
+    """
+    Waits for a Facebook AdReportRun job to complete and returns the results.
+
+    Parameters:
+        - job (AdReportRun): A Facebook AdReportRun object representing the job to wait for.
+
+    Returns:
+        A Facebook AdReportRun object representing the completed job, including the results.
+
+    The function retrieves the status of the job every 10 seconds until the job is marked as complete or failed. If the job fails, the current status of the job is returned. If the job is successful, the function retrieves the final result of the job and returns it.
+    """
+    job = job.api_get()
+    account_id = job["account_id"]
+    # TODO: use logging module
+    # print(f"Waiting for account: {account_id}")
+    while (
+        job[AdReportRun.Field.async_percent_completion] < 100 or job[AdReportRun.Field.async_status] == "Job Running"
+    ):
+        if job[AdReportRun.Field.async_status] == "Job Failed":
+            return job
+        time.sleep(10)
+        job = job.api_get()
+    # string = f"ID:{account_id} Type:result"
+    # print(string)
+    return job.api_get()
+
+
+# REGEX
+def get_creative_id(str):
+    return extract_regex_expression(str, r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
+
+
+def safe_divide(numerator, denominator):
+    try:
+        return numerator / denominator
+    except ZeroDivisionError:
+        return None
+
+
+def extract_regex_expression(string, expression):
+    """
+    Extracts a substring from `string` using a regular expression `expression`.
+
+    Parameters:
+        - string (str): The input string from which to extract a substring.
+        - expression (str): A string representing a regular expression that will be used to extract a substring from `string`.
+
+    Returns:
+        - match (str or None): If a match is found, the extracted substring is returned. Otherwise, `None` is returned.
+    """
+    match = re.search(expression, string)
+    if match:
+        return match.group()
+    else:
+        return None
+
+
+# THREADS
+def create_reports(ad_accounts, date_preset):
+    """
+    Create reports for multiple ad accounts.
+
+    Parameters:
+        - ad_accounts (list): A list of ad accounts to create reports for.
+        - date_preset (str): The date preset to use when creating the reports.
+
+    Returns:
+        - ret (dict): A dictionary containing information about the report creation process.
+        The keys of the dictionary are:
+        - "successful_reports":A list of reports that were successful.
+        - "unsuccessful_reports": A list of reports that were not successful.
+        - "unsuccessful_request_futures": A list of futures that resulted in an unsuccessful request.
+        - "uncompleted_report_futures": A list of futures that have not yet completed.
+    """
+    insights_params = create_insights_params(date_preset)
+    # generate list of ad reports using threads
+    # TODO: implement a way to check futures errors
+    succesfully_created_reports, unsuccessful_request_futures = run_async_jobs(
+        ad_accounts, create_async_job, globals.DEFAULT_INSIGHTS_FIELDS, insights_params
+    )
+    completed_reports, uncompleted_report_futures = run_async_jobs(succesfully_created_reports, wait_for_job)
+    successful_reports, unsuccessful_reports = organize_reports(completed_reports)
+    ret = {
+        "successful_reports": successful_reports,
+        "unsuccessful_reports": unsuccessful_reports,
+        "unsuccessful_request_futures": unsuccessful_request_futures,
+        "uncompleted_report_futures": uncompleted_report_futures,
+    }
+    return ret
 
 
 def run_async_jobs(jobs, job_fn, *args, **kwargs):
@@ -712,45 +791,13 @@ def create_async_job(account, fields, params):
         job = job.api_get()
     except Exception as e:
         print(e.body())
-        time.sleep(1)
-        print("retrying")
+        time.sleep(3)
         job = job.api_get()
+        print("Retry Successful")
     return job
 
 
-def wait_for_job(job):
-    """
-    Waits for a Facebook AdReportRun job to complete and returns the results.
-
-    Parameters:
-        - job (AdReportRun): A Facebook AdReportRun object representing the job to wait for.
-
-    Returns:
-        A Facebook AdReportRun object representing the completed job, including the results.
-
-    The function retrieves the status of the job every 10 seconds until the job is marked as complete or failed. If the job fails, the current status of the job is returned. If the job is successful, the function retrieves the final result of the job and returns it.
-    """
-    job = job.api_get()
-    account_id = job["account_id"]
-    # TODO: use logging module
-    # print(f"Waiting for account: {account_id}")
-    while (
-        job[AdReportRun.Field.async_percent_completion] < 100 or job[AdReportRun.Field.async_status] == "Job Running"
-    ):
-        if job[AdReportRun.Field.async_status] == "Job Failed":
-            return job
-        time.sleep(10)
-        job = job.api_get()
-    # string = f"ID:{account_id} Type:result"
-    # print(string)
-    return job.api_get()
-
-
-def write_object_structure(object):
-    with open(f"structures/{object.__class__.__name__}.json", "w") as file:
-        file.write(json.dumps(object._data, indent=4))
-
-
+# WRITING/MISC
 def count_objects(d):
     count = 0
     if isinstance(d, dict):
@@ -762,6 +809,11 @@ def count_objects(d):
     else:
         count = 1
     return count
+
+
+def write_object_structure(object):
+    with open(f"structures/{object.__class__.__name__}.json", "w") as file:
+        file.write(json.dumps(object._data, indent=4))
 
 
 def write_all_data_to_csv(facebook_data, appointments):
@@ -828,30 +880,16 @@ def write_ads_to_csv(data, filename):
             writer.writerow(row)
 
 
-def get_creative_id(str):
-    return extract_regex_expression(str, r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
-
-
-def write_ads_with_issues_to_csv(data):
+def write_ads_with_issues_to_csv(data, filename):
     fieldnames = set.union(*[set(d.keys()) for d in data])
     fieldnames.add("creative_id")
-    with open("uploads/ads_with_issues.csv", "w", newline="") as csvfile:
+    with open(filename, "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for d in data:
             row = d.export_all_data().copy()
             row["creative_id"] = get_creative_id(d["name"])
             writer.writerow(row)
-
-
-def upload_to_clickup(tasks):
-    uploads = ["ads_with_issues", "last_7d", "last_3d", "last_30d", "appointments"]
-    timestamp = datetime.now().strftime("%Y-%m-%d")
-    for task in tasks:
-        if task["name"] in uploads:
-            print("Uploading file to ClickUp: ", task["name"])
-            file = {"attachment": (f"{timestamp}.csv", open(f"uploads/{task['name']}.csv", "rb"))}
-            task.upload_file(file)
 
 
 def write_dicts_to_json(data, file_path):
@@ -867,33 +905,22 @@ def merge_dicts(dict1, dict2):
     return combined_dict
 
 
-def request_issues(account, fields, params):
-    """
-    Retrieve advertising issues from a Facebook account.
-
-    Parameters:
-        - account (dict): A dictionary containing information about a Facebook account.
-        - fields (str): A string representing the fields to be included in the request.
-        - params (dict): A dictionary containing parameters for the request.
-
-    Returns:
-        - issues (object): An object representing the issues retrieved from the Facebook account.
-    """
-    account_id = account["id"]
-    # TODO: LOG
-    # print(f"Requesting Issues for account: {account_id}")
-    issues = account.get_ads(fields=fields, params=params)
-    write_facebook_rate_limits(issues.headers())
-    # print(f"Issues for account {account_id}")
-    return issues
-
-
 def sleep_and_print(seconds):
     """
     Sleeps for the given number of seconds and prints the number of seconds passed after each second.
     """
-    for i in range(1, seconds + 1):
+    for i in range(seconds, 0, -1):
         time.sleep(1)
         sys.stdout.write(f"\rSeconds passed: {i}")
         sys.stdout.flush()
     print("")
+
+
+def loading_bar(progress, total, bar_length=40, time_to_sleep=None):
+    percent_complete = progress / total
+    num_bar_symbols = int(percent_complete * bar_length)
+    bar = "[" + "-" * num_bar_symbols + " " * (bar_length - num_bar_symbols) + "]"
+
+    sys.stdout.write("\r" + bar + " " + f"{progress}/{total} ({int(percent_complete) * 100}%)")
+    sleep_and_print(time_to_sleep)
+    # sys.stdout.flush()
