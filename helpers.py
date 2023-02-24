@@ -279,19 +279,22 @@ def get_ghl_appointments_by_location_and_calendar(ghl_client, clickup_task_list,
                 calendars = location.get_calendar_services()
                 appointment_data[location["id"]] = []
                 for calendar in calendars:
-                    appointments = calendar.get_appointments(params=appointment_params)
-                    # convert timestamps to timezone of appointment
-                    for appointment in appointments:
-                        try:
-                            appointment["createdAt"] = convert_timestamp_to_timezone(
-                                appointment["createdAt"], appointment["selectedTimezone"]
-                            )
-                            appointment["startTime"] = convert_timestamp_to_timezone(
-                                appointment["startTime"], appointment["selectedTimezone"]
-                            )
-                        except KeyError:
-                            print("KeyError: ", appointment["id"])
-                    appointment_data[location["id"]].extend(appointments)
+                    try:
+                        appointments = calendar.get_appointments(params=appointment_params)
+                        # convert timestamps to timezone of appointment
+                        for appointment in appointments:
+                            try:
+                                appointment["createdAt"] = convert_timestamp_to_timezone(
+                                    appointment["createdAt"], appointment["selectedTimezone"]
+                                )
+                                appointment["startTime"] = convert_timestamp_to_timezone(
+                                    appointment["startTime"], appointment["selectedTimezone"]
+                                )
+                            except KeyError:
+                                print("KeyError: ", appointment["id"])
+                        appointment_data[location["id"]].extend(appointments)
+                    except Exception as e:
+                        print("Exception: ", e)
     return appointment_data
 
 
