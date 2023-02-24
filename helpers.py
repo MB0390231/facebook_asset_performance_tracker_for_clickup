@@ -205,7 +205,7 @@ def get_custom_field_value(input_list, name):
 
 
 def upload_to_clickup(tasks):
-    uploads = ["ads_with_issues", "last_7d", "last_3d", "last_30d", "appointments"]
+    uploads = ["ads_with_issues", "last_7d", "last_3d", "last_30d"]
     timestamp = datetime.now().strftime("%Y-%m-%d")
     for task in tasks:
         if task["name"] in uploads:
@@ -405,28 +405,49 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
             - "ads_data": A list of ad data for the ad accounts.
             - "unsuccessful_writes": A list of unsuccessful writes to process the ad data.
     """
+    print(f"Creating reports for date preset {date_preset}:")
     reports = create_reports(ad_accounts, date_preset)
-    retry_accounts = [
-        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
-        for report in reports["unsuccessful_reports"]
-    ]
-    if retry_accounts:
-        print("Retrying creating reports for date preset {date_preset}:")
-        for accounts in retry_accounts:
-            print(f"    - {accounts['account_id']}")
-    retry_reports = create_reports(retry_accounts, date_preset)
-    for failure in retry_reports["unsuccessful_reports"]:
-        print(f"Failed to create report for account {failure['account_id']}")
+    if len(reports["unsuccessful_reports"]) > 0:
+        failed_reports = retry_accounts(reports["unsuccessful_reports"], date_preset)
+        del reports["unsuccessful_reports"]
+        reports = merge_dicts(reports, failed_reports)
     # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
-    del reports["unsuccessful_reports"]
-    merged = merge_dicts(reports, retry_reports)
-
     ads = []
     # TODO: check write errors
-    _, unsuccessful_writes = run_async_jobs(merged["successful_reports"], proccess_report, ads)
-    merged["ads_data"] = ads
-    merged["unsuccesful_writes"] = unsuccessful_writes
-    return merged
+    _, unsuccessful_writes = run_async_jobs(reports["successful_reports"], proccess_report, ads)
+    reports["ads_data"] = ads
+    reports["unsuccesful_writes"] = unsuccessful_writes
+    return reports
+
+
+def retry_accounts(failed_reports, date_preset):
+    time.sleep(10)
+    count = 1
+    retry_accounts = [
+        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"]) for report in failed_reports
+    ]
+    print(f"Attempt number {count} to retry retrieving account data for {date_preset}:")
+    for accounts in retry_accounts:
+        print(f"    - {accounts['account_id']}")
+    retry_reports = create_reports(retry_accounts, date_preset)
+    success = []
+    for report in retry_reports["successful_reports"]:
+        success.append(report)
+    while len(retry_reports["unsuccessful_reports"]) > 0 or count != 5:
+        time.sleep(10)
+        count += 1
+        retry_accounts = [
+            AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
+            for report in retry_reports["unsuccessful_reports"]
+        ]
+        print(f"Attempt number {count} to retry retrieving account data for {date_preset}:")
+        for accounts in retry_accounts:
+            print(f"    - {accounts['account_id']}")
+        retry_reports = create_reports(retry_accounts, date_preset)
+        for report in retry_reports["successful_reports"]:
+            success.append(report)
+    for failure in retry_reports["unsuccessful_reports"]:
+        print(f"Failed to retry report for accounts {failure['account_id']} after {count} attempts.")
 
 
 def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
@@ -466,6 +487,9 @@ def proccess_report(report, list):
     """
     # TODO: I will want to implement try and except to catch facebook_errors
     cursor = report.get_result(params={"limit": 500})
+    if len(cursor) == 0:
+        print(f"No data for account: {report[AdReportRun.Field.account_id]}")
+        return
     # write accounts rate limit to globals.RATE_LIMIT
     write_facebook_rate_limits(cursor.headers())
     list.extend(cursor)
@@ -787,6 +811,8 @@ def create_async_job(account, fields, params):
     # TODO: use logging module
     # print(f"Created report for account: {account['id']}")
     # this is wehre I am getting object not created errors
+    # sleep becuase I assume facebook servers lag behind
+    time.sleep(3)
     try:
         job = job.api_get()
     except Exception as e:
@@ -898,6 +924,7 @@ def write_dicts_to_json(data, file_path):
 
 
 def merge_dicts(dict1, dict2):
+    # merges dictionaries with the same keys
     combined_dict = {}
     keys = set([*dict1.keys(), *dict2.keys()])
     for key in keys:
