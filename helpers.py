@@ -491,7 +491,7 @@ def proccess_report(report, list):
     # TODO: I will want to implement try and except to catch facebook_errors
     cursor = report.get_result(params={"limit": 500})
     if len(cursor) == 0:
-        print(f"No data for account: {report[AdReportRun.Field.account_id]}")
+        # print(f"No data for account: {report[AdReportRun.Field.account_id]}")
         return
     # write accounts rate limit to globals.RATE_LIMIT
     write_facebook_rate_limits(cursor.headers())
