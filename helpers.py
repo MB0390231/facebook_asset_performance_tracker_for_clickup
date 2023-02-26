@@ -30,6 +30,11 @@ def datetime_to_epoch(datetime_string):
     return int(datetime_obj.timestamp() * 1000)
 
 
+def convert_timestamp_to_date(timestamp):
+    date = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+    return date
+
+
 def generate_datetime_string(day_delta):
     """
     Generate a datetime string representing a target date.
@@ -410,47 +415,38 @@ def facebook_ad_accounts_ad_data(ad_accounts, date_preset):
     """
     print(f"Creating reports for date preset {date_preset}:")
     reports = create_reports(ad_accounts, date_preset)
-    if len(reports["unsuccessful_reports"]) > 0:
-        failed_reports = retry_accounts(reports["unsuccessful_reports"], date_preset)
-        del reports["unsuccessful_reports"]
-        reports = merge_dicts(reports, failed_reports)
     # I don't want to merge the original reports unsuccessful reports, some of them might have been successful the second time
     ads = []
     # TODO: check write errors
     _, unsuccessful_writes = run_async_jobs(reports["successful_reports"], proccess_report, ads)
+    if len(reports["unsuccessful_reports"]) > 0:
+        failed_reports = retry_accounts(reports["unsuccessful_reports"], date_preset)
+        ads.extend(failed_reports["successful_data"])
+        reports["unsuccessful_retries"] = failed_reports["unsuccessful_account_ids"]
     reports["ads_data"] = ads
     reports["unsuccesful_writes"] = unsuccessful_writes
+
     return reports
 
 
-def retry_accounts(failed_reports, date_preset):
-    time.sleep(10)
-    count = 1
-    retry_accounts = [
-        AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"]) for report in failed_reports
-    ]
-    print(f"Attempt number {count} to retry retrieving account data for {date_preset}:")
+def retry_accounts(reports, date_preset):
+    retry_accounts = [AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"]) for report in reports]
+    print(f"Retrying retrieving account data for {date_preset}:")
+    ret = {"successful_data": [], "unsuccessful_account_ids": []}
+    insights_params = create_insights_params(date_preset)
+    insights_fields = globals.DEFAULT_INSIGHTS_FIELDS
     for accounts in retry_accounts:
         print(f"    - {accounts['account_id']}")
-    retry_reports = create_reports(retry_accounts, date_preset)
-    success = []
-    for report in retry_reports["successful_reports"]:
-        success.append(report)
-    while len(retry_reports["unsuccessful_reports"]) > 0 or count != 5:
-        time.sleep(10)
-        count += 1
-        retry_accounts = [
-            AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
-            for report in retry_reports["unsuccessful_reports"]
-        ]
-        print(f"Attempt number {count} to retry retrieving account data for {date_preset}:")
-        for accounts in retry_accounts:
-            print(f"    - {accounts['account_id']}")
-        retry_reports = create_reports(retry_accounts, date_preset)
-        for report in retry_reports["successful_reports"]:
-            success.append(report)
-    for failure in retry_reports["unsuccessful_reports"]:
-        print(f"Failed to retry report for accounts {failure['account_id']} after {count} attempts.")
+        try:
+            cursor = accounts.get_insights(params=insights_params, fields=insights_fields)
+            if len(cursor) == 0:
+                continue
+            ret["successful_data"].extend(cursor)
+            print(f"    - {accounts['account_id']} successful")
+        except Exception as e:
+            print(f"Failed to retrieve data for account {accounts['account_id']}: {e}")
+            ret["unsuccessful_account_ids"].append(accounts[AdAccount.Field.account_id])
+    return ret
 
 
 def facebook_data_organized_by_regex(list_of_objs, target_key, regex_pattern):
@@ -954,3 +950,7 @@ def loading_bar(progress, total, bar_length=40, time_to_sleep=None):
     sys.stdout.write("\r" + bar + " " + f"{progress}/{total} ({int(percent_complete) * 100}%)")
     sleep_and_print(time_to_sleep)
     # sys.stdout.flush()
+
+
+def current_date():
+    return datetime.now().strftime("%Y-%m-%d")

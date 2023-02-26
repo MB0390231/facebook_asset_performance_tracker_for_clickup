@@ -62,6 +62,15 @@ def main():
 
     helpers.log_report_errors(FACEBOOK_DATA)
     # run through all exceptions and print them
+    TOKEN_DATA = FACEBOOK_CLIENT.call(
+        "GET", f"https://graph.facebook.com/v16.0/debug_token?input_token={FB_TOKEN}"
+    ).json()
+
+    NORTHSTAR.update(
+        values={
+            "content": f"Last Updated: {helpers.current_date()}\nFacebook Token: {helpers.convert_timestamp_to_date(TOKEN_DATA['data']['data_access_expires_at']['data']['expires_at'])}"
+        }
+    )
 
 
 if __name__ == "__main__":
