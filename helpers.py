@@ -587,6 +587,10 @@ def log_report_errors(facebook_data):
         - reports (list): A list of reports that were not successful.
     """
     for date_presets in facebook_data["data"].keys():
+        if len(facebook_data["data"][date_presets]["unsuccessful_account_ids"]) > 0:
+            print(f"Unsuccessful retries for {date_presets}:")
+            for account_id in facebook_data["data"][date_presets]["unsuccessful_account_ids"]:
+                print(f"    {account_id}")
         if len(facebook_data["data"][date_presets]["unsuccessful_request_futures"]) > 0:
             print(f"Unsuccessful requests for {date_presets}:")
             for future in facebook_data["data"][date_presets]["unsuccessful_request_futures"]:

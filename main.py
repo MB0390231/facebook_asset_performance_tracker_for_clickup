@@ -72,6 +72,8 @@ def main():
         }
     )
 
+    helpers.log_report_errors(FACEBOOK_DATA)
+
 
 if __name__ == "__main__":
     main()
