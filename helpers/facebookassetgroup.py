@@ -15,6 +15,7 @@ class FacebookAssetGroups:
         self.reports = {}
         pass
 
+    # TODO: instead of using asset group attributes, use a dictionary to store the asset groups with the report and data as values
     def add_asset_group(self, target_key, regex_pattern, asset_group_name):
         """
         Creates asset_group groups where an asset_group is a regex pattern meant to be found in an objs target_key
@@ -36,7 +37,7 @@ class FacebookAssetGroups:
         logger.debug(f"Processing asset group {asset_group_name}")
         group = self.__getattribute__(asset_group_name)
         for preset in self.data_container.date_presets:
-            for obj in self.data_container.ads_data[preset]:
+            for obj in self.data_container.insights_data[preset]:
                 extracted = helpers.extract_regex_expression(obj[target_key], regex_pattern)
                 if extracted:
                     asset_id = extracted.lower()

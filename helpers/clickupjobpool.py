@@ -50,12 +50,13 @@ class ClickupJobPool:
         self.jobs = []
         self.failed_futures = []
 
-    def create_insights_jobs(self, task, custom_fields, asset_data):
+    def create_insights_jobs(
+        self, task, custom_fields, asset_data, asset_match_type="name", custom_field_location=None
+    ):
         """
         This method will take in a dictionary of custom fields and a json file representing consolidated statistics for a facebook asset.
         It will then create a list of jobs to be executed by the clickup job handler.
         """
-        jobs = []
 
         # I need to split up the custom fields, use the numbers to determine which date preset of a report to use, and use the letters to determine which metric to use.
         for fields, id in custom_fields.items():
@@ -66,7 +67,6 @@ class ClickupJobPool:
                 or split_fields[0] not in self.insights_field_mapping
                 or split_fields[1] not in self.date_mapping
             ):
-                # TODO: set value to 0
                 continue
 
             # get the date preset
@@ -75,7 +75,14 @@ class ClickupJobPool:
             # get the metric
             metric = self.insights_field_mapping[split_fields[0]]
 
-            asset = task["name"].lower()
+            if asset_match_type == "name":
+                asset = task["name"].lower()
+            elif asset_match_type == "custom_field":
+                asset = [
+                    field["value"]
+                    for field in task["custom_fields"]
+                    if field["name"].lower() == custom_field_location.lower()
+                ][0].lower()
 
             # If the asset is not in the date_preset data, set the value to 0.
             if asset not in asset_data[date_preset].keys():
@@ -100,15 +107,6 @@ class ClickupJobPool:
             self.jobs.append((task["id"], id, round_value))
             logger.debug(f"Created job for asset: {asset}, {fields}: {id} value: {round_value}")
         return
-
-    def process_clickup_jobs(self):
-        """
-        Executes a batch of jobs by updating custom fields in a task using a `ClickupClient` object.
-        Automatically chooses the amount of jobs to run based on the rate limit remaining and the rate limit reset time.
-        """
-        complete = False
-
-        pass
 
     def process_clickup_jobs(self):
         """
@@ -139,17 +137,18 @@ class ClickupJobPool:
                 queued_jobs.append(self.jobs.pop())
             retry, failure = helpers.run_async_jobs(queued_jobs, self.run_clickup_field_job)
             batch += 1
-            logger.debug(f"Batch {batch} complete.")
+            logger.info(f"Batch {batch} complete.")
+            logger.info(f"      Remaining jobs: {len(self.jobs)}")
             if failure:
                 logger.debug("      Failed jobs: " + str(len(failure)))
             retries.extend([job for job in retry if isinstance(job, tuple)])
             failures.extend(failure)
             sleep = reset - time.time()
             if sleep > 0 and not complete:
-                logger.debug(f"Sleeping for {math.ceil(sleep)} seconds.")
+                logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
                 time.sleep(math.ceil(sleep))
         if retries:
-            logger.debug(f"Failed jobs: {len(retries)}. Re-added into the queue.")
+            logger.info(f"Failed jobs: {len(retries)}. Re-added into the queue.")
         self.jobs = retries
         self.failed_futures.extend(failures)
         return
