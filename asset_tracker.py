@@ -19,7 +19,7 @@ CLICKUP_TOKEN = os.environ["CLICKUP_TOKEN"]
 ASSET_TRACKER_FOLDER_ID = os.environ["ASSET_TRACKER_FOLDER_ID"]
 
 
-FB = FacebookDataContainer(FacebookAdsApi.init(APP_ID=APP_ID, access_token=FB_TOKEN))
+FB = FacebookDataContainer(FacebookAdsApi.init(app_id=APP_ID, access_token=FB_TOKEN))
 
 FB.set_business_ad_accounts(BUSINESS_ID)
 FB.generate_data_for_batch_date_presets(
