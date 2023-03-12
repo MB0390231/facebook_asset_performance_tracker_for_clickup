@@ -40,12 +40,8 @@ class FacebookDataContainer:
             fields = ["account_status"]
         if "account_status" not in fields:
             fields.append("account_status")
-        business = Business(business_id)
-        all = [
-            *self.call_method(business, "get_owned_ad_accounts", fields=fields),
-            *self.call_method(business, "get_client_ad_accounts", fields=fields),
-        ]
-        for account in all:
+        accounts = self.retrieve_ad_accounts(business_id, fields=fields)
+        for account in accounts:
             account_status = str(account["account_status"])
             if self.ad_account_status_mapping[account_status] not in self.accounts.keys():
                 self.accounts[self.ad_account_status_mapping[account_status]] = []
@@ -53,8 +49,30 @@ class FacebookDataContainer:
             self.logger.debug(
                 f"Added account {account[AdAccount.Field.id]} to business {business_id} with status {account_status}"
             )
-        self.logger.info(f"{len(all)} accounts found for business {business_id}")
+        self.logger.info(f"{len(accounts)} accounts found for business {business_id}")
         return
+
+    def retrieve_ad_accounts(self, business_id, fields=None):
+        if fields is None:
+            fields = ["account_status"]
+        if "account_status" not in fields and "name" not in fields:
+            fields.append("name")
+            fields.append("account_status")
+        business = Business(business_id).api_get(fields=["id", "name"])
+        all = []
+        seen = set()
+        for agency in [business, *self.call_method(business, "get_agencies", fields=["id", "name"])]:
+            self.logger.debug(f"Agency {agency['name']} found for business {business_id}")
+            # get all ad accounts for the agency
+            accounts = [
+                *self.call_method(agency, "get_owned_ad_accounts", fields=fields),
+                *self.call_method(agency, "get_client_ad_accounts", fields=fields),
+            ]
+            for account in accounts:
+                if account["id"] not in seen:
+                    all.append(account)
+                    seen.add(account["id"])
+        return all
 
     def generate_data_for_batch_date_presets(self, accounts, date_presets, fields, params):
         """
@@ -240,7 +258,7 @@ class FacebookDataContainer:
         Retrieve ads for a given account and returns a list of ads.
         """
         cursor = account.get_ads(fields=fields, params=params)
-        self.logger.debug(f"Successfully retrieved ads for account: {account[AdAccount.Field.account_id]}")
+        self.logger.debug(f"Successfully retrieved ads for account: {account[AdAccount.Field.id]}")
         return cursor
 
     def call_method(self, object, method_name, *args, **kwargs):
@@ -250,7 +268,9 @@ class FacebookDataContainer:
         try:
             method = getattr(object, method_name)
             result = method(*args, **kwargs)
-            self.logger.debug(f"Successfully called method: {method_name} on object: {object.__class__.__name__}")
+            self.logger.debug(
+                f"Successfully called method: {method_name} on object: {object.__class__.__name__} with id: {object.get('id',None)} with name: {object.get('name',None)}"
+            )
             return result
         except Exception as e:
             self.logger.error(f"Failed to call method: {method_name} on object: {object.__class__.__name__}")
