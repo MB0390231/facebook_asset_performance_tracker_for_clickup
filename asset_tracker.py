@@ -17,6 +17,7 @@ APP_ID = os.environ["APP_ID"]
 FB_TOKEN = os.environ["FB_TOKEN"]
 BUSINESS_ID = os.environ["BUSINESS_ID"]
 CLICKUP_TOKEN = os.environ["CLICKUP_TOKEN"]
+ASSET_TRACKER_FOLDER_ID = os.environ["ASSET_TRACKER_FOLDER_ID"]
 
 
 FB = FacebookDataContainer(FacebookAdsApi.init(APP_ID=APP_ID, access_token=FB_TOKEN))
