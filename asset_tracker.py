@@ -9,7 +9,6 @@ import os
 from defaults import (
     DEFAULT_INSIGHTS_FIELDS,
     DEFAULT_INSIGHTS_PARAMS,
-    ASSET_TRACKER_FOLDER_ID,
     DATE_PRESETS,
 )
 
