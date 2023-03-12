@@ -246,7 +246,7 @@ class FacebookDataContainer:
         """
         adds reports results to self.insights_data[date_preset]
         """
-        cursor = report.get_result(params={"limit": 500})
+        cursor = report.get_result(params={"limit": 200})
         self.logger.debug(f"Successfully retrieved insights for account: {report[AdReportRun.Field.account_id]}")
         if len(cursor) > 0:
             with self.thread_lock:
