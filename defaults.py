@@ -1,3 +1,7 @@
+"""
+I plan on adding a feature to allow users to specify their own defaults
+"""
+
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.adobjects.ad import Ad
 
@@ -50,9 +54,5 @@ DEFAULT_ISSUES_PARAMS = {
     "limit": 250,
 }
 
-
-RGM_CLICKUP_TEAM = "ReDefined Growth Marketing"
-RGM_ASSET_TRACKERS_SPACE = "Media Buying SOP's - Temp"
-ASSET_TRACKER = "Asset Tracker"
 
 DATE_PRESETS = ["maximum", "last_3d", "last_7d", "last_30d"]
