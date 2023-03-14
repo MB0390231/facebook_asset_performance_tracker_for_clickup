@@ -1,10 +1,8 @@
-from helpers.logging_config import get_logger
+from helpers.logging_config import BaseLogger
 from helpers import helpers
 
-logger = get_logger(__name__)
 
-
-class FacebookAssetGroups:
+class FacebookAssetGroups(BaseLogger):
     """
     An AssetGroup is a collection of assets
     An asset is a regex pattern meant to be found in an objs target_key
@@ -13,7 +11,7 @@ class FacebookAssetGroups:
     def __init__(self, data_container) -> None:
         self.data_container = data_container
         self.reports = {}
-        pass
+        return super().__init__()
 
     # TODO: instead of using asset group attributes, use a dictionary to store the asset groups with the report and data as values
     def add_asset_group(self, target_key, regex_pattern, asset_group_name):
@@ -34,7 +32,6 @@ class FacebookAssetGroups:
         # TODO:
         # set attribute for which ever data set (ex. retailer data or creative data)
         self.create_asset_group(asset_group_name)
-        logger.debug(f"Processing asset group {asset_group_name}")
         group = self.__getattribute__(asset_group_name)
         for preset in self.data_container.date_presets:
             for obj in self.data_container.insights_data[preset]:
@@ -45,7 +42,9 @@ class FacebookAssetGroups:
                         group[preset][asset_id] = [obj]
                     else:
                         group[preset][asset_id].append(obj)
-        logger.debug(f"Processed asset group {asset_group_name}")
+            for keys in group[preset].keys():
+                self.logger.debug(f"Found {len(group[preset][keys])} assets for {keys}")
+        self.logger.info(f"Processed asset group {asset_group_name}")
         self.generate_asset_report(asset_group_name)
         return group
 
@@ -56,10 +55,8 @@ class FacebookAssetGroups:
         # set attr if not already set
         if not hasattr(self, f"{asset_group}"):
             self.__setattr__(f"{asset_group}", {})
-            logger.debug(f"Asset group {asset_group} created")
         else:
             self.__setattr__(f"{asset_group}", {})
-            logger.debug(f"Asset group {asset_group} reset")
         for dates in self.data_container.date_presets:
             self.__getattribute__(asset_group)[dates] = {}
         return
@@ -78,10 +75,12 @@ class FacebookAssetGroups:
         group = self.__getattribute__(asset_group)
         for dates in self.data_container.date_presets:
             report[dates] = {}
+            self.logger.debug(f"Generating report asset group {asset_group} for date preset: {dates}")
             for keys, value in group[dates].items():
                 report[dates][keys] = self.consolidate_objects_stats(value)
+                self.logger.debug(f"{keys}: {report[dates][keys]}")
         self.reports[asset_group] = report
-        logger.debug(f"Generated report for asset group {asset_group}")
+        self.logger.info(f"Generated report for asset group {asset_group}")
         return
 
     # TODO: use a mapping to map the keys to the correct function. EX "spend": total(), "CTR": weighted_average()
@@ -119,5 +118,4 @@ class FacebookAssetGroups:
         # calculate averages for CPC, CPM, and CTR
         consolidation["cpm"] = helpers.weighted_average(cpm_values, weights)
         consolidation["ctr"] = helpers.weighted_average(ctr_values, weights)
-
         return consolidation

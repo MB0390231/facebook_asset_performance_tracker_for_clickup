@@ -1,16 +1,17 @@
 import logging
+from helpers import helpers
 
 
-def get_logger(name, level=logging.DEBUG):
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-    console_formatter = logging.Formatter("%(message)s")
-    file_handler = logging.FileHandler(f"logs/{name}.log", "w")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-    return logger
+class BaseLogger:
+    def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(logging.DEBUG)
+
+        file_handler = logging.FileHandler(f"logs/{helpers.current_date()}.log", "w")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
+        self.logger.addHandler(file_handler)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(logging.Formatter("%(message)s"))
+        self.logger.addHandler(console_handler)

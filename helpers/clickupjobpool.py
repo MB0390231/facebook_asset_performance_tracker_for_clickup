@@ -1,12 +1,10 @@
-from helpers.logging_config import get_logger
+from helpers.logging_config import BaseLogger
 from helpers import helpers
 import time
 import math
 
-logger = get_logger(__name__)
 
-
-class ClickupJobPool:
+class ClickupJobPool(BaseLogger):
     """
     This class is going to handle the discovery of facebook insights fields to be used by the clickup job handler.
     Statistics Discovery:
@@ -49,6 +47,7 @@ class ClickupJobPool:
         self.clickup_client = clickup_client
         self.jobs = []
         self.failed_futures = []
+        return super().__init__()
 
     def create_insights_jobs(
         self, task, custom_fields, asset_data, asset_match_type="name", custom_field_location=None
@@ -87,7 +86,7 @@ class ClickupJobPool:
             # If the asset is not in the date_preset data, set the value to 0.
             if asset not in asset_data[date_preset].keys():
                 self.jobs.append((task["id"], id, 0))
-                logger.debug(f"Created job for asset: {asset}, {fields}: {id} value: 0")
+                self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: 0")
                 continue
 
             # spend will be the default value if the custom_field begins with "cp" and the metric is not found.
@@ -96,7 +95,6 @@ class ClickupJobPool:
             # get the value and handle key errors
             if isinstance(metric, tuple):
                 value = asset_data[date_preset][asset][metric[0]].get(metric[1], 0)
-                # value = asset_data[date_preset][asset][metric[0]].[metric[1]]
             else:
                 if metric.startswith("cost_per") and metric not in asset_data[date_preset][asset]:
                     value = spend
@@ -105,7 +103,7 @@ class ClickupJobPool:
             # create the job
             round_value = round(value, 2)
             self.jobs.append((task["id"], id, round_value))
-            logger.debug(f"Created job for asset: {asset}, {fields}: {id} value: {round_value}")
+            self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {round_value}")
         return
 
     def process_clickup_jobs(self):
@@ -137,18 +135,18 @@ class ClickupJobPool:
                 queued_jobs.append(self.jobs.pop())
             retry, failure = helpers.run_async_jobs(queued_jobs, self.run_clickup_field_job)
             batch += 1
-            logger.info(f"Batch {batch} complete.")
-            logger.info(f"      Remaining jobs: {len(self.jobs)}")
-            if failure:
-                logger.debug("      Failed jobs: " + str(len(failure)))
+            self.logger.info(f"Batch {batch} complete. Remaining jobs: {len(self.jobs)} Failed jobs: {len(failure)}")
             retries.extend([job for job in retry if isinstance(job, tuple)])
             failures.extend(failure)
             sleep = reset - time.time()
             if sleep > 0 and not complete:
-                logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
+                self.logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
                 time.sleep(math.ceil(sleep))
         if retries:
-            logger.info(f"Failed jobs: {len(retries)}. Re-added into the queue.")
+            # TODO: IDEA: Add a retry counter to the job tuple and only retry a job a certain number of times.
+            # self.logger.info ("Retrying failed jobs.")
+            # self.process_clickup_jobs()
+            self.logger.info(f"Finsihed Processing Jobs. {len(retries)} re-added into the queue.")
         self.jobs = retries
         self.failed_futures.extend(failures)
         return
@@ -173,10 +171,11 @@ class ClickupJobPool:
             method = "POST"
             values = {"value": job[2]}
             _ = self.clickup_client.make_request(method=method, route=route, values=values)
+            self.logger.debug(f"Updated task id: {job[0]} custom field id: {job[1]} with value: {job[2]}")
         except Exception as e:
             # log the error, task id (job[0]), custom field id (job[1]), and value (job[2])
-            logger.debug(
-                f"Failed to update task id {job[0]} custom field id {job[1]} with value {job[2]} error message {e}"
+            self.logger.debug(
+                f"Failed to update task id: {job[0]} custom field id: {job[1]} with value: {job[2]} error: {e}"
             )
             return job
         return

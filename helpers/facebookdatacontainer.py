@@ -1,13 +1,13 @@
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
-from helpers.logging_config import get_logger
+from helpers.logging_config import BaseLogger
 import time
 from helpers import helpers
 import threading
 
 
-class FacebookDataContainer:
+class FacebookDataContainer(BaseLogger):
     account_limits = {"x-business-use-case-usage": {}, "x-ad-account-usage": {}, "x-app-usage": {}}
     ad_account_status_mapping = {
         "1": "ACTIVE",
@@ -32,8 +32,7 @@ class FacebookDataContainer:
         self.failed_futures = {}
         self.insights_data = {}
         self.accounts = {}
-        self.logger = get_logger(self.__class__.__name__)
-        return
+        return super().__init__()
 
     def set_business_ad_accounts(self, business_id, fields=None):
         if fields is None:
@@ -186,7 +185,7 @@ class FacebookDataContainer:
             )
             data.extend(cursor)
         self.insights_data[date_preset].extend(data)
-        self.logger.info(f"Retreived insights for date preset: {date_preset}")
+        self.logger.info(f"Successfully retried failed facebook reports for {date_preset}")
         return
 
     def retrieve_ads(self, accounts, fields, params):
@@ -246,7 +245,7 @@ class FacebookDataContainer:
         """
         adds reports results to self.insights_data[date_preset]
         """
-        cursor = report.get_result(params={"limit": 200})
+        cursor = report.get_result(params={"limit": 250})
         self.logger.debug(f"Successfully retrieved insights for account: {report[AdReportRun.Field.account_id]}")
         if len(cursor) > 0:
             with self.thread_lock:

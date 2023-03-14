@@ -55,4 +55,4 @@ DEFAULT_ISSUES_PARAMS = {
 }
 
 
-DATE_PRESETS = ["maximum", "last_3d", "last_7d", "last_30d"]
+DEFAULT_DATE_PRESETS = ["maximum", "last_3d", "last_7d", "last_30d"]

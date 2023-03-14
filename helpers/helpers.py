@@ -2,6 +2,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import re
 import csv
+import datetime
+
+
+def convert_timestamp_to_date(timestamp):
+    date = datetime.datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+    return date
 
 
 # REGEX
@@ -111,7 +117,7 @@ def write_ads_to_csv(data, filename):
 
 
 def current_date():
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.datetime.now().strftime("%Y-%m-%d")
 
 
 def weighted_average(values, weights):
@@ -125,10 +131,14 @@ def weighted_average(values, weights):
 
 def upload_to_clickup(tasks):
     # generate a timestamp with the current date and time in the format YYYY-MM-DD HH:MM am (e.g. 2020-01-01 12:00 am)
-    timestamp = datetime.now().strftime("%Y-%m-%d %I:%M %p")
     for task in tasks:
+        if task["name"].lower() == "runtime":
+            file = {"attachment": (f"{current_date()}.log", open(f"logs/{current_date()}.log", "rb"))}
+            task.upload_file(file)
+            print("Uploading runtime log")
+            continue
         try:
-            file = {"attachment": (f"{timestamp}.csv", open(f"uploads/{task['name']}.csv", "rb"))}
+            file = {"attachment": (f"{current_date()}.csv", open(f"uploads/{task['name']}.csv", "rb"))}
             task.upload_file(file)
             print(f"Uploaded file for task {task['name']}")
         except Exception as e:
