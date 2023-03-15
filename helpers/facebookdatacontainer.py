@@ -1,10 +1,12 @@
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
+from facebook_business.exceptions import FacebookRequestError
 from helpers.logging_config import BaseLogger
 import time
 from helpers import helpers
 import threading
+import json
 
 
 class FacebookDataContainer(BaseLogger):
@@ -32,13 +34,14 @@ class FacebookDataContainer(BaseLogger):
         self.failed_futures = {}
         self.insights_data = {}
         self.accounts = {}
+        self.rates = {"business_use_case_usage": {}}
         return super().__init__()
 
     def set_business_ad_accounts(self, business_id, fields=None):
         if fields is None:
-            fields = ["account_status"]
-        if "account_status" not in fields:
-            fields.append("account_status")
+            fields = [AdAccount.Field.account_status, AdAccount.Field.name]
+        if AdAccount.Field.account_status not in fields:
+            fields.append(AdAccount.Field.account_status)
         accounts = self.retrieve_ad_accounts(business_id, fields=fields)
         for account in accounts:
             account_status = str(account["account_status"])
@@ -118,6 +121,8 @@ class FacebookDataContainer(BaseLogger):
         if date_preset not in self.date_presets:
             self.date_presets.append(date_preset)
         for attr in self.__dict__.values():
+            if attr == "rates":
+                continue
             if type(attr) is dict and date_preset not in attr.keys():
                 attr[date_preset] = []
         return
@@ -179,11 +184,17 @@ class FacebookDataContainer(BaseLogger):
         params["date_preset"] = date_preset
         # TODO: Follow the standard of using async here
         for account in retry:
-            cursor = account.get_insights(fields=fields, params=params)
-            self.logger.debug(
-                f"Successfully retried insights retrieval for account: {account['account_id']} for date preset: {date_preset}"
-            )
-            data.extend(cursor)
+            try:
+                cursor = account.get_insights(fields=fields, params=params)
+                self.logger.debug(
+                    f"Successfully retried insights retrieval for account: {account['account_id']} for date preset: {date_preset}"
+                )
+                data.extend(cursor)
+            except FacebookRequestError as e:
+                self.logger.error(
+                    f"Failed to retry insights retrieval for account: {account['account_id']} for date preset: {date_preset}. Error: {e.body()['error']['message']}"
+                )
+                continue
         self.insights_data[date_preset].extend(data)
         self.logger.info(f"Successfully retried failed facebook reports for {date_preset}")
         return
@@ -246,10 +257,15 @@ class FacebookDataContainer(BaseLogger):
         adds reports results to self.insights_data[date_preset]
         """
         cursor = report.get_result(params={"limit": 250})
-        self.logger.debug(f"Successfully retrieved insights for account: {report[AdReportRun.Field.account_id]}")
-        if len(cursor) > 0:
-            with self.thread_lock:
-                self.insights_data[date_preset].extend([obj.export_all_data() for obj in cursor])
+        self.extract_business_use_case_usage(cursor.headers())
+        insert = []
+        # count the total number of results
+        insert = [obj.export_all_data() for obj in cursor]
+        self.logger.debug(
+            f"Successfully retrieved insights for account: {report[AdReportRun.Field.account_id]} Number of results: {len(insert)} for date preset: {date_preset}"
+        )
+        with self.thread_lock:
+            self.insights_data[date_preset].extend(insert)
         return
 
     def request_ads(self, account, fields, params):
@@ -276,34 +292,26 @@ class FacebookDataContainer(BaseLogger):
             self.logger.error(e)
             return None
 
-    # #TODO:
-    # def update_account_rates(self,headers):
-    #     """
-    #     Updates the headers for accounts insights
-    #     {
-    #     "account_id": {
-    #         "ads_insights": {
-    #             "call_count": 0,
-    #             "total_cputime": 0,
-    #             "total_time": 0,
-    #             "estimated_time_to_regain_access": 0,
-    #         },
-    #         "ads_management": {
-    #             "call_count": 0,
-    #             "total_cputime": 0,
-    #             "total_time": 0,
-    #             "estimated_time_to_regain_access": 0,
-    #         },
-    #     }
-
-    #     """
-    #     #Try json.load(headers['x-business-use-case-usage'])
-    #     headers = json.load(headers)
-    #     for keys in self.account_limits.keys():
-    #         try:
-    #             self.account_limits[keys]
-    #         except:
-    #     pass
+    def extract_business_use_case_usage(self, headers):
+        if "x-business-use-case-usage" in headers:
+            usage_data = json.loads(headers["x-business-use-case-usage"])
+            for account_id, data in usage_data.items():
+                type = data[0]["type"]
+                call_count = data[0]["call_count"]
+                total_cputime = data[0]["total_cputime"]
+                estimated_time_to_regain_access = data[0]["estimated_time_to_regain_access"]
+                self.logger.debug(
+                    f"Business Use Case Usage for account: {account_id} type: {type} call_count: {call_count} total_cputime: {total_cputime} estimated_time_to_regain_access: {estimated_time_to_regain_access}"
+                )
+                with self.thread_lock:
+                    self.rates["business_use_case_usage"][account_id] = {
+                        "type": type,
+                        "call_count": call_count,
+                        "total_cputime": total_cputime,
+                        "estimated_time_to_regain_access": estimated_time_to_regain_access,
+                    }
+        else:
+            print("x-business-use-case-usage header not found")
 
     # #TODO:
     # def log_report_errors(facebook_data):

@@ -12,7 +12,6 @@ from defaults import (
     DEFAULT_DATE_PRESETS,
 )
 
-
 APP_ID = os.environ["APP_ID"]
 FB_TOKEN = os.environ["FB_TOKEN"]
 BUSINESS_ID = os.environ["BUSINESS_ID"]
@@ -35,10 +34,10 @@ CU = ClickupClient.init(CLICKUP_TOKEN)
 ASSET_TRACKER_FOLDER = Folder(id=ASSET_TRACKER_FOLDER_ID)
 
 CLICKUP_ASSETS = ASSET_TRACKER_FOLDER.get_lists()
-COPY_TRACKER = [list for list in CLICKUP_ASSETS if list["name"] == "Copies"][0]
-CREATIVE_TRACKER = [list for list in CLICKUP_ASSETS if list["name"] == "Creatives"][0]
-LOGS = [list for list in CLICKUP_ASSETS if list["name"] == "Logs"][0]
-LOGS_TASKS = LOGS.get_tasks()
+COPY_TRACKER = [list for list in CLICKUP_ASSETS if list["name"].lower() == "copy data tracker"][0]
+CREATIVE_TRACKER = [list for list in CLICKUP_ASSETS if list["name"].lower() == "creative data tracker"][0]
+INFORMATION = [list for list in CLICKUP_ASSETS if list["name"].lower() == "information"][0]
+INFORMATION_TASKS = INFORMATION.get_tasks()
 
 COPY_TRACKER_FIELDS = {field["name"]: field["id"] for field in COPY_TRACKER.get_custom_fields()}
 CREATIVE_TRACKER_FIELDS = {field["name"]: field["id"] for field in CREATIVE_TRACKER.get_custom_fields()}
@@ -56,11 +55,10 @@ POOL.process_clickup_jobs()
 
 for dates in FB.date_presets:
     helpers.write_ads_to_csv(FB.insights_data[dates], f"uploads/{dates}.csv")
-helpers.upload_to_clickup(LOGS_TASKS)
+helpers.upload_to_clickup(INFORMATION_TASKS)
+
 
 TOKEN_DATA = FB.api.call("GET", f"https://graph.facebook.com/v16.0/debug_token?input_token={FB_TOKEN}").json()
-LOGS.update(
-    values={
-        "content": f"Last Updated: {helpers.current_date()}\nFacebook Token Expiration: {helpers.convert_timestamp_to_date(TOKEN_DATA['data']['expires_at'])}"
-    }
-)
+update_info = f"Last Updated: {helpers.current_date()}\nFacebook Token Expiration: {helpers.convert_timestamp_to_date(TOKEN_DATA['data']['expires_at'])}"
+for lists in [COPY_TRACKER, CREATIVE_TRACKER]:
+    lists.update(values={"content": update_info})

@@ -57,7 +57,6 @@ class ClickupJobPool(BaseLogger):
         It will then create a list of jobs to be executed by the clickup job handler.
         """
 
-        # I need to split up the custom fields, use the numbers to determine which date preset of a report to use, and use the letters to determine which metric to use.
         for fields, id in custom_fields.items():
             # split the fields
             split_fields = fields.lower().split()
@@ -97,13 +96,14 @@ class ClickupJobPool(BaseLogger):
                 value = asset_data[date_preset][asset][metric[0]].get(metric[1], 0)
             else:
                 if metric.startswith("cost_per") and metric not in asset_data[date_preset][asset]:
-                    value = spend
+                    value = None
                 else:
                     value = asset_data[date_preset][asset][metric]
             # create the job
-            round_value = round(value, 2)
-            self.jobs.append((task["id"], id, round_value))
-            self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {round_value}")
+            if value:
+                value = round(value, 2)
+            self.jobs.append((task["id"], id, value))
+            self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {value}")
         return
 
     def process_clickup_jobs(self):
