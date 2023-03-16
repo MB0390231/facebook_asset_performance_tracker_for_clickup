@@ -141,11 +141,12 @@ class ClickupJobPool(BaseLogger):
                 self.logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
                 time.sleep(math.ceil(sleep))
         if retries:
-            # TODO: IDEA: Add a retry counter to the job tuple and only retry a job a certain number of times.
-            # self.logger.info ("Retrying failed jobs.")
-            # self.process_clickup_jobs()
             self.logger.info(f"Finsihed Processing Jobs. {len(retries)} re-added into the queue.")
         self.jobs = retries
+        # retry failed jobs
+        if self.jobs:
+            self.logger.info(f"Retrying {len(self.jobs)} jobs.")
+            self.process_clickup_jobs()
         self.failed_futures.extend(failures)
         return
 
