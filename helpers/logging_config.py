@@ -7,7 +7,7 @@ class BaseLogger:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
 
-        file_handler = logging.FileHandler(f"logs/{helpers.current_date()}.log", "w")
+        file_handler = logging.FileHandler(f"logs/{helpers.current_date()}.log", "a")
         file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
         self.logger.addHandler(file_handler)
 

@@ -97,6 +97,7 @@ class FacebookAssetGroups(BaseLogger):
         ctr_values = []
         weights = []
         cpm_values = []
+        cpc_values = []
         for obj in list_of_objects:
             spend = float(obj["spend"])
             consolidation["spend"] = consolidation.get("spend", 0) + spend
@@ -108,6 +109,7 @@ class FacebookAssetGroups(BaseLogger):
 
             # add the values and weights for weighted average
             weights.append(spend)
+            cpc_values.append(float(obj.get("cpc", 0)))
             ctr_values.append(float(obj.get("inline_link_click_ctr", 0)))
             cpm_values.append(float(obj.get("cpm", 0)))
 
@@ -116,6 +118,7 @@ class FacebookAssetGroups(BaseLogger):
             consolidation[f"cost_per_{actions}"] = consolidation["spend"] / consolidation["actions"][actions]
 
         # calculate averages for CPC, CPM, and CTR
+        consolidation["cpc"] = helpers.weighted_average(cpc_values, weights)
         consolidation["cpm"] = helpers.weighted_average(cpm_values, weights)
         consolidation["ctr"] = helpers.weighted_average(ctr_values, weights)
         return consolidation

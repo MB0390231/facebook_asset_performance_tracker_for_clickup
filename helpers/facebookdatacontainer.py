@@ -231,7 +231,7 @@ class FacebookDataContainer(BaseLogger):
         self.logger.debug(f"Created report for account: {account['id']}")
         return job
 
-    def wait_for_job(self, report, date_preset):
+    def wait_for_job(self, report, date_preset, timeout=90):
         """
         Waits for a Facebook AdReportRun report to complete and returns the results.
 
@@ -243,13 +243,22 @@ class FacebookDataContainer(BaseLogger):
 
         The function retrieves the status of the report every 10 seconds until the report is marked as complete or failed. If the report fails, the current status of the report is returned. If the report is successful, the function retrieves the final result of the report and returns it.
         """
-        # TODO: reduce risk for async race conditions
+        end_time = time.time() + timeout
         report = report.api_get()
-        while report[AdReportRun.Field.async_status] in ("Job Not Started", "Job Running", "Job Started"):
+        while (
+            report[AdReportRun.Field.async_percent_completion] < 100
+            or report[AdReportRun.Field.async_status].lower() == "job running"
+            and time.time() < end_time
+        ):
+            if report[AdReportRun.Field.async_status].lower() in ["job failed", "job skipped"]:
+                with self.thread_lock:
+                    self.failed_async_reports[date_preset].append(report)
+                return
             time.sleep(10)
             report = report.api_get()
         if report[AdReportRun.Field.async_status] != "Job Completed":
-            self.failed_async_reports[date_preset].append(report)
+            with self.thread_lock:
+                self.failed_async_reports[date_preset].append(report)
         return
 
     def add_facebook_report_results(self, report, date_preset):

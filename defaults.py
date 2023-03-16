@@ -11,6 +11,7 @@ DEFAULT_INSIGHTS_FIELDS = [
     AdsInsights.Field.actions,
     AdsInsights.Field.cost_per_inline_link_click,
     AdsInsights.Field.cpm,
+    AdsInsights.Field.cpc,
     AdsInsights.Field.inline_link_click_ctr,
     AdsInsights.Field.ad_id,
     AdsInsights.Field.campaign_id,
@@ -51,8 +52,8 @@ DEFAULT_ISSUES_PARAMS = {
             "value": ["DISAPPROVED", "WITH_ISSUES"],
         },
     ],
-    "limit": 250,
+    "limit": 200,
 }
 
 
-DEFAULT_DATE_PRESETS = ["maximum", "last_3d", "last_7d", "last_30d"]
+DEFAULT_DATE_PRESETS = ["maximum", "last_30d"]

@@ -30,7 +30,7 @@ class ClickupJobPool(BaseLogger):
         "purchases": ("actions", "purchase"),
         "cpl": "cost_per_lead",
         "cpp": "cost_per_purchase",
-        "cpc": "cost_per_link_click",
+        "cpc": "cpc",
         "cpm": "cpm",
         "ctr": "ctr",
         "count": "count",
@@ -69,7 +69,8 @@ class ClickupJobPool(BaseLogger):
 
             # get the date preset
             date_preset = self.date_mapping[split_fields[1]]
-
+            if date_preset not in asset_data.keys():
+                continue
             # get the metric
             metric = self.insights_field_mapping[split_fields[0]]
 
@@ -87,9 +88,6 @@ class ClickupJobPool(BaseLogger):
                 self.jobs.append((task["id"], id, 0))
                 self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: 0")
                 continue
-
-            # spend will be the default value if the custom_field begins with "cp" and the metric is not found.
-            spend = asset_data[date_preset][asset]["spend"]
 
             # get the value and handle key errors
             if isinstance(metric, tuple):
