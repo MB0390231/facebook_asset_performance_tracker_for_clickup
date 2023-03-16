@@ -189,7 +189,7 @@ class FacebookDataContainer(BaseLogger):
                 self.logger.debug(
                     f"Successfully retried insights retrieval for account: {account['account_id']} for date preset: {date_preset}"
                 )
-                data.extend(cursor)
+                data.extend([x.export_all_data() for x in cursor])
             except FacebookRequestError as e:
                 self.logger.error(
                     f"Failed to retry insights retrieval for account: {account['account_id']} for date preset: {date_preset}. Error: {e.body()['error']['message']}"
