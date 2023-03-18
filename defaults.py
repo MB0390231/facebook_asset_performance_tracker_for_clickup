@@ -28,7 +28,13 @@ DEFAULT_INSIGHTS_PARAMS = {
             "operator": "IN",
             "value": ["ACTIVE", "PAUSED", "ADSET_PAUSED", "CAMPAIGN_PAUSED"],
         },
+        {
+            "field": "ad.spend",
+            "operator": "GREATER_THAN",
+            "value": 0,
+        },
     ],
+    "limit": 100,
 }
 
 DEFAULT_ISSUES_FIELDS = [
