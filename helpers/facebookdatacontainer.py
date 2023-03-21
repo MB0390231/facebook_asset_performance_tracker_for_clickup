@@ -1,16 +1,15 @@
+from collections import defaultdict
+from facebook_business.exceptions import FacebookRequestError
+from helpers.helpers import run_async_jobs, extend_list_async, write_ads_to_csv
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
-from facebook_business.exceptions import FacebookRequestError
 from helpers.logging_config import BaseLogger
 import time
-from helpers import helpers
-import threading
 import json
 
 
-class FacebookDataContainer(BaseLogger):
-    account_limits = {"x-business-use-case-usage": {}, "x-ad-account-usage": {}, "x-app-usage": {}}
+class FaceBookDataContainter(BaseLogger):
     ad_account_status_mapping = {
         "1": "ACTIVE",
         "2": "DISABLED",
@@ -23,18 +22,16 @@ class FacebookDataContainer(BaseLogger):
         "201": "ANY_ACTIVE",
         "202": "ANY_CLOSED",
     }
-    # get logger with the name as the class name
 
-    def __init__(self, facebook_client):
-        self.api = facebook_client
-        self.thread_lock = threading.Lock()
-        self.date_presets = []
-        self.async_reports = {}
-        self.failed_async_reports = {}
-        self.failed_futures = {}
-        self.insights_data = {}
-        self.accounts = {}
-        self.rates = {"business_use_case_usage": {}}
+    def __init__(self):
+        self.data = {
+            "accounts": defaultdict(list),
+            "failed_jobs": [],
+            "reporting_data": defaultdict(list),
+            "async_reports": defaultdict(list),
+            "failed_account_ids": defaultdict(list),
+            "rates": defaultdict(dict),
+        }
         return super().__init__()
 
     def set_business_ad_accounts(self, business_id, fields=None):
@@ -45,14 +42,12 @@ class FacebookDataContainer(BaseLogger):
         accounts = self.retrieve_ad_accounts(business_id, fields=fields)
         for account in accounts:
             account_status = str(account["account_status"])
-            if self.ad_account_status_mapping[account_status] not in self.accounts.keys():
-                self.accounts[self.ad_account_status_mapping[account_status]] = []
-            self.accounts[self.ad_account_status_mapping[account_status]].append(account)
+            self.data["accounts"][self.ad_account_status_mapping[account_status]].append(account)
             self.logger.debug(
                 f"Added account {account[AdAccount.Field.id]} to business {business_id} with status {account_status}"
             )
         self.logger.info(f"{len(accounts)} accounts found for business {business_id}")
-        return
+        return self
 
     def retrieve_ad_accounts(self, business_id, fields=None):
         if fields is None:
@@ -63,281 +58,134 @@ class FacebookDataContainer(BaseLogger):
         business = Business(business_id).api_get(fields=["id", "name"])
         all = []
         seen = set()
-        for agency in [business, *self.call_method(business, "get_agencies", fields=["id", "name"])]:
-            self.logger.debug(f"Agency {agency['name']} found for business {business_id}")
+        for agency in [business, *self.call_method(business, "get_agencies", ["id", "name"])]:
             # get all ad accounts for the agency
-            accounts = [
-                *self.call_method(agency, "get_owned_ad_accounts", fields=fields),
-                *self.call_method(agency, "get_client_ad_accounts", fields=fields),
-            ]
-            for account in accounts:
-                if account["id"] not in seen:
-                    all.append(account)
-                    seen.add(account["id"])
+            owned = self.call_method(agency, "get_owned_ad_accounts", fields=fields)
+            clients = self.call_method(agency, "get_client_ad_accounts", fields=fields)
+            accounts = [*owned, *clients]
+            all.extend([account for account in accounts if account["id"] not in seen and not seen.add(account["id"])])
         return all
 
-    def generate_data_for_batch_date_presets(self, accounts, date_presets, fields, params):
-        """
-        Generates data for a list of date presets.
-        """
+    def retrieve_facebook_objects_insights(self, facebook_objects, fields, params):
+        date_preset = params["date_preset"]
+        results, failed_jobs = run_async_jobs(facebook_objects, self.retrieve_insights, fields, params)
+        self.data["failed_jobs"].extend(failed_jobs)
+        accounts = [obj for obj in results if obj.__class__.__name__ == "AdAccount" and not results.remove(obj)]
+        if accounts:
+            finished_reports_or_accounts, failed_jobs = run_async_jobs(
+                accounts, self.process_async_report, fields, params
+            )
+            self.logger.info(f"Finished processing async reports ({date_preset})")
+            self.data["failed_jobs"].extend(failed_jobs)
+            accounts = [
+                obj
+                for obj in finished_reports_or_accounts
+                if obj.__class__.__name__ == "AdAccount" and not finished_reports_or_accounts.remove(obj)
+            ]
+            results.extend(finished_reports_or_accounts)
+            self.data["failed_account_ids"][date_preset].extend(accounts)
+        run_async_jobs(results, extend_list_async, self.data["reporting_data"][date_preset])
+        self.logger.info(f"Finished retrieving insights ({date_preset})")
+        return self
 
-        for dates in date_presets:
-            self._add_date_preset_default(dates)
-            self.create_reports(accounts, dates, fields, params)
-        self.process_all_reports()
-        for dates in date_presets:
-            self.process_report_result(dates)
-        for dates in date_presets:
-            self.retry_failed_async_reports(dates, fields, params)
-        return
+    def retrieve_insights(self, facebook_object, fields, params):
+        # retrieve insights for a single ad account and return the results,
+        # if there is an error.body() and error["error"]["code"] is 1 or 100, then an async report is generated, processed, and the results are returned
+        # check rates
 
-    def generate_data_for_date_preset(self, accounts, date_preset, fields, params):
-        """
-        Generates data for a single date preset.
-        """
-        self._add_date_preset_default(date_preset)
-        self.create_reports(accounts, date_preset, fields, params)
-        self.process_all_reports()
-        self.process_report_result(date_preset)
-        self.retry_failed_async_reports(fields, params)
-        return
-
-    def create_reports(self, accounts, date_preset, fields, params):
-        params["date_preset"] = date_preset
-        success, failure = helpers.run_async_jobs(accounts, self.create_report, fields, params)
-        self.async_reports[date_preset] = success
-        self.failed_futures[date_preset] = failure
-        self.logger.info(
-            f"Created {len(accounts)} reports ({date_preset}). Successful: {len(success)}. Failed: {len(failure)}"
-        )
-        return
-
-    def _add_date_preset_default(self, date_preset):
-        """
-        Adds date preset to instance attributes that are dictinaries so I can assume the date persets are there later
-        """
-        if type(date_preset) is not str:
-            raise TypeError("date_preset must be a string")
-        if date_preset not in self.date_presets:
-            self.date_presets.append(date_preset)
-        for attr in self.__dict__.values():
-            if attr == "rates":
-                continue
-            if type(attr) is dict and date_preset not in attr.keys():
-                attr[date_preset] = []
-        return
-
-    def process_all_reports(self):
-        """
-        processes reports for every date preset.
-        """
-        for dates in self.date_presets:
-            self.process_date_presets_reports(dates)
-        return
-
-    def process_date_presets_reports(self, date_preset):
-        """
-        processes reports for a given date preset.
-        """
-        # Reports should automatically update in self.async_reports
-        reports = self.async_reports[date_preset]
-        if reports:
-            _, failure = helpers.run_async_jobs(reports, self.wait_for_job, date_preset)
-            self.failed_futures[date_preset].extend(failure)
-            self.logger.info(f"Reports finished for {date_preset}. Successful: {len(_)}. Failed: {len(failure)}")
-        return
-
-    def process_all_reports_results(self):
-        """
-        Processes the results of all reports.
-        """
-        for dates in self.date_presets:
-            self.process_report_result(dates)
-        return
-
-    def process_report_result(self, date_preset):
-        """
-        Processes the results of the reports for a given date preset.
-        """
-        reports = [
-            report
-            for report in self.async_reports[date_preset]
-            if report[AdReportRun.Field.async_status] == "Job Completed"
-        ]
-        success, failure = helpers.run_async_jobs(reports, self.add_facebook_report_results, date_preset)
-        self.failed_futures[date_preset].extend(failure)
-        self.logger.info(f"Results processed for {date_preset}. Successful: {len(success)}. Failed: {len(failure)}")
-        return
-
-    def retry_failed_async_reports(self, date_preset, fields, params):
-        """
-        Runs through every ad report for every date preset and retrieves insights non async to ensure every account is added
-        """
-        if not self.failed_async_reports[date_preset]:
-            self.logger.info(f"No failed async reports for {date_preset}")
+        try:
+            cursor = self.call_method(facebook_object, "get_insights", fields, params)
+            return cursor
+        except FacebookRequestError as e:
+            error = e.body()["error"]
+            if error.get("code", None) in [1, 100]:  # async needed
+                return facebook_object
+            self.logger.exception(e)
             return
-        retry = [
-            AdAccount(f"act_{report['account_id']}").api_get(fields=["account_id"])
-            for report in self.failed_async_reports[date_preset]
-        ]
-        data = []
-        params["date_preset"] = date_preset
-        # TODO: Follow the standard of using async here
-        for account in retry:
-            try:
-                cursor = account.get_insights(fields=fields, params=params)
-                self.logger.debug(
-                    f"Successfully retried insights retrieval for account: {account['account_id']} for date preset: {date_preset}"
-                )
-                data.extend([x.export_all_data() for x in cursor])
-            except FacebookRequestError as e:
-                self.logger.error(
-                    f"Failed to retry insights retrieval for account: {account['account_id']} for date preset: {date_preset}. Error: {e.body()['error']['message']}"
-                )
-                continue
-        self.insights_data[date_preset].extend(data)
-        self.logger.info(f"Successfully retried failed facebook reports for {date_preset}")
+
+    def process_async_report(self, facebook_object, fields, params, max_attempts=5, initial_delay=60):
+        # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
+        attempts = 0
+        first_run = True
+        while first_run or report[AdReportRun.Field.async_status] != "Job Completed" and attempts <= max_attempts:
+            if first_run:
+                first_run = False
+            report = self.call_method(facebook_object, "get_insights_async", fields, params)
+            report = self.wait_for_job(report)
+            attempts += 1
+            if report[AdReportRun.Field.async_status] == "Job Completed":
+                return report
+            if attempts > max_attempts:
+                return facebook_object
+            self.logger.info(
+                f"Async report for facebook object id: {facebook_object['id']} failed with a async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
+            )
+            time.sleep(initial_delay)
+            initial_delay *= 2
         return
 
-    def retrieve_ads(self, accounts, fields, params):
+    def wait_for_job(self, report, timeout=600):
         """
-        Retrieve ads for a given account and returns a list of ads.
-        """
-        success, failure = helpers.run_async_jobs(accounts, self.request_ads, fields, params)
-        self.logger.info(
-            f"Retrieved ads for {len(accounts)} accounts. Number of Successful Requests: {len(success)}. Number of Failed Requests: {len(failure)}"
-        )
-        self.ads = [ad for lists in success for ad in lists]
-        if "ads" not in self.failed_futures.keys():
-            self.failed_futures["ads"] = []
-        self.failed_futures["ads"].extend(failure)
-        return
-
-    def create_report(self, account, fields, params):
-        """
-        Creates a Facebook AdReportRun report for a given account.
-
-        Parameters:
-            - account (AdAccount): A Facebook AdAccount object representing the account to create a report for.
-            - fields (list): A list of fields to include in the report.
-            - params (dict): A dictionary of parameters to include in the report.
-
-        Returns:
-            A Facebook AdReportRun object representing the created report.
-
-        The function creates a report for the given account and returns the report object. If the report fails to create, the function returns None.
-        """
-        job = account.get_insights_async(fields=fields, params=params)
-        self.logger.debug(f"Created report for account: {account['id']}")
-        return job
-
-    def wait_for_job(self, report, date_preset, timeout=90):
-        """
-        Waits for a Facebook AdReportRun report to complete and returns the results.
-
-        Parameters:
-            - report (AdReportRun): A Facebook AdReportRun object representing the report to wait for.
-
-        Returns:
-            A Facebook AdReportRun object representing the completed report, including the results.
-
-        The function retrieves the status of the report every 10 seconds until the report is marked as complete or failed. If the report fails, the current status of the report is returned. If the report is successful, the function retrieves the final result of the report and returns it.
+        Processes async reports and returns the results. There is timeout of 10 minutes.
         """
         end_time = time.time() + timeout
-        report = report.api_get()
+        report = self.call_method(report, "api_get")
         while (
-            report[AdReportRun.Field.async_percent_completion] < 100
-            or report[AdReportRun.Field.async_status].lower() == "job running"
+            report[AdReportRun.Field.async_status] in ["Job Running", "Job Not Started", "Job Started"]
             and time.time() < end_time
         ):
-            if report[AdReportRun.Field.async_status].lower() in ["job failed", "job skipped"]:
-                with self.thread_lock:
-                    self.failed_async_reports[date_preset].append(report)
-                return
+            report = self.call_method(report, "api_get")
             time.sleep(10)
-            report = report.api_get()
-        if report[AdReportRun.Field.async_status] != "Job Completed":
-            with self.thread_lock:
-                self.failed_async_reports[date_preset].append(report)
-        return
+        return report
 
-    def add_facebook_report_results(self, report, date_preset):
-        """
-        adds reports results to self.insights_data[date_preset]
-        """
-        cursor = report.get_result(params={"limit": 250})
-        self.extract_business_use_case_usage(cursor.headers())
-        insert = []
-        # count the total number of results
-        insert = [obj.export_all_data() for obj in cursor]
-        self.logger.debug(
-            f"Successfully retrieved insights for account: {report[AdReportRun.Field.account_id]} Number of results: {len(insert)} for date preset: {date_preset}"
-        )
-        with self.thread_lock:
-            self.insights_data[date_preset].extend(insert)
-        return
-
-    def request_ads(self, account, fields, params):
-        """
-        Retrieve ads for a given account and returns a list of ads.
-        """
-        cursor = account.get_ads(fields=fields, params=params)
-        self.logger.debug(f"Successfully retrieved ads for account: {account[AdAccount.Field.id]}")
-        return cursor
+    def extract_business_use_case_usage(self, headers):
+        if "x-business-use-case-usage" not in headers:
+            return
+        usage_data = json.loads(headers["x-business-use-case-usage"])
+        for account_id, data in usage_data.items():
+            type = data[0]["type"]
+            call_count = data[0]["call_count"]
+            total_cputime = data[0]["total_cputime"]
+            estimated_time_to_regain_access = data[0]["estimated_time_to_regain_access"]
+            self.data["rates"][account_id] = {
+                "type": type,
+                "call_count": call_count,
+                "total_cputime": total_cputime,
+                "estimated_time_to_regain_access": estimated_time_to_regain_access,
+            }
+        return True
 
     def call_method(self, object, method_name, *args, **kwargs):
         """
         Calls a method on an object and returns the results.
         """
-        try:
-            method = getattr(object, method_name)
-            result = method(*args, **kwargs)
-            self.logger.debug(
-                f"Successfully called method: {method_name} on object: {object.__class__.__name__} with id: {object.get('id',None)} with name: {object.get('name',None)}"
-            )
-            return result
-        except Exception as e:
-            self.logger.error(f"Failed to call method: {method_name} on object: {object.__class__.__name__}")
-            self.logger.error(e)
-            return None
+        method = getattr(object, method_name)
+        result = method(*args, **kwargs)
+        # TODO - this is a hack to get the business use case usage data. Need to find a better way to do this.
+        if method_name == "get_insights":
+            self.extract_business_use_case_usage(result.headers())
 
-    def extract_business_use_case_usage(self, headers):
-        if "x-business-use-case-usage" in headers:
-            usage_data = json.loads(headers["x-business-use-case-usage"])
-            for account_id, data in usage_data.items():
-                type = data[0]["type"]
-                call_count = data[0]["call_count"]
-                total_cputime = data[0]["total_cputime"]
-                estimated_time_to_regain_access = data[0]["estimated_time_to_regain_access"]
-                self.logger.debug(
-                    f"Business Use Case Usage for account: {account_id} type: {type} call_count: {call_count} total_cputime: {total_cputime} estimated_time_to_regain_access: {estimated_time_to_regain_access}"
-                )
-                with self.thread_lock:
-                    self.rates["business_use_case_usage"][account_id] = {
-                        "type": type,
-                        "call_count": call_count,
-                        "total_cputime": total_cputime,
-                        "estimated_time_to_regain_access": estimated_time_to_regain_access,
-                    }
-        else:
-            print("x-business-use-case-usage header not found")
+        def build_string(result):
+            string = f"Called method: {method_name} on object: {object.__class__.__name__}"
+            if result.__class__.__name__ == "Cursor":
+                string += f" with Result: Cursor"
+                return string
+            else:
+                string += f" with Result: {result.__class__.__name__}"
+                if not isinstance(result, dict):
+                    return string
+                for k, v in result.items():
+                    string += f" {k}: {v},"
+            return string
 
-    # #TODO:
-    # def log_report_errors(facebook_data):
-    #     """
-    #     Logs errors for reports that were not successful.
+        self.logger.debug(build_string(result))
+        return result
 
-    #     Parameters:
-    #         - reports (list): A list of reports that were not successful.
-    #     """
-    #     for date_presets in facebook_data["data"].keys():
-    #         if len(facebook_data["data"][date_presets]["unsuccessful_request_futures"]) > 0:
-    #             print(f"Unsuccessful requests for {date_presets}:")
-    #             for future in facebook_data["data"][date_presets]["unsuccessful_request_futures"]:
-    #                 print(f"    {future.exception()}")
-    #             print("")
-    #         if len(facebook_data["data"][date_presets]["unsuccessful_reports"]) > 0:
-    #             print(f"Unsuccessful reports for {date_presets}:")
-    #             for report in facebook_data["data"][date_presets]["unsuccessful_reports"]:
-    #                 print(f"    {report}")
-    #             print("")
+    def export_all_reporting_data(self):
+        """
+        Exports all data to a csv file.
+        """
+        for date_preset, data in self.data["reporting_data"].items():
+            self.logger.info(f"Writing {date_preset} reporting data to csv")
+            write_ads_to_csv([d.export_all_data() for d in data], f"uploads/{date_preset}.csv")
+        return self
