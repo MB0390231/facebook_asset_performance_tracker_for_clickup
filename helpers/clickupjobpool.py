@@ -1,5 +1,5 @@
 from helpers.logging_config import BaseLogger
-from helpers import helpers
+from helpers.helpers import run_async_jobs
 import time
 import math
 
@@ -25,14 +25,13 @@ class ClickupJobPool(BaseLogger):
 
     # mapping of custom field names to insights fields. Used to correlate custom fields to insights fields.
     insights_field_mapping = {
-        "spend": "spend",
         "leads": ("actions", "lead"),
         "purchases": ("actions", "purchase"),
         "cpl": "cost_per_lead",
         "cpp": "cost_per_purchase",
-        "cpc": "cpc",
+        "cost_per_inline_link_click": "cpc",
         "cpm": "cpm",
-        "ctr": "ctr",
+        "inline_link_click_ctr": "ctr",
         "count": "count",
     }
 
@@ -131,7 +130,7 @@ class ClickupJobPool(BaseLogger):
                 complete = True
             for _ in range(rate):
                 queued_jobs.append(self.jobs.pop())
-            retry, failure = helpers.run_async_jobs(queued_jobs, self.run_clickup_field_job)
+            retry, failure = run_async_jobs(queued_jobs, self.run_clickup_field_job)
             batch += 1
             self.logger.info(f"Batch {batch} complete. Remaining jobs: {len(self.jobs)} Failed jobs: {len(failure)}")
             retries.extend([job for job in retry if isinstance(job, tuple)])
