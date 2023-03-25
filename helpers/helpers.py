@@ -1,8 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 import csv
 import re
 import csv
 import datetime
+from helpers.logging_config import BaseLogger
+
+logger = BaseLogger(name="helpers")
 
 
 def convert_timestamp_to_date(timestamp):
@@ -33,6 +37,17 @@ def extract_regex_expression(string, expression):
 # THREADS
 
 
+def extend_list_async(cursor, list):
+    len_before = len(list)
+    if cursor.__class__.__name__ != "Cursor":  # assume adreport run
+        cursor = cursor.get_result(params={"limit": 300})
+    with Lock():
+        list.extend(cursor)
+    len_after = len(list)
+    logger.logger.debug(f"Extended list from {len_before} to {len_after}")
+    return None
+
+
 def run_async_jobs(jobs, job_fn, *args, **kwargs):
     """
     Run a list of jobs asynchronously using threads.
@@ -48,13 +63,23 @@ def run_async_jobs(jobs, job_fn, *args, **kwargs):
     success = []
     fail = []
     with ThreadPoolExecutor() as executor:
-        job_futures = [executor.submit(job_fn, job, *args, **kwargs) for job in jobs]
+        job_futures = {executor.submit(job_fn, job, *args, **kwargs): job for job in jobs}
         for future in as_completed(job_futures):
+            job = job_futures[future]
             try:
                 result = future.result()
                 success.append(result)
-            except:
-                fail.append(future)
+            except Exception as e:
+                logger.logger.exception(
+                    f"Error executing Future:\n"
+                    f"job: {job}\n"
+                    f"job_fn: {job_fn.__name__}\n"
+                    f"args: {args}\n"
+                    f"kwargs: {kwargs}\n"
+                    f"{'-'*80}\n",
+                    exc_info=e,
+                )
+                fail.append((job, job_fn, args, kwargs))
     return success, fail
 
 
@@ -87,16 +112,14 @@ def write_ads_to_csv(data, filename):
 
     """
 
-    # use a set comprehension to get the keys from each dictionary
-    key_sets = [set(d.keys()) for d in data]
-    # use the union method to combine all of the key sets into a single set
-    unique_keys = set().union(*key_sets)
-    unique_keys.discard("actions")
-    unique_keys.add("leads")
-    unique_keys.add("purchases")
-    unique_keys.add("creative_id")
-    unique_keys.add("retailer_id")
-    unique_keys.add("copy_id")
+    unique_keys = set().union(*(set(d.keys()) for d in data))
+    unique_keys -= {"actions"}
+    unique_keys |= {"leads", "purchases", "creative_id", "retailer_id", "copy_id"}
+    # add action types from actions to unique_keys
+    for d in data:
+        for action in d.get("actions", []):
+            unique_keys.add(action["action_type"])
+
     fieldsnames = sorted(list(unique_keys))
     with open(filename, "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldsnames)
@@ -106,27 +129,21 @@ def write_ads_to_csv(data, filename):
             row["retailer_id"] = extract_regex_expression(d["ad_name"], r"^\d{3}")
             row["creative_id"] = extract_regex_expression(d["ad_name"], r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
             row["copy_id"] = extract_regex_expression(d["ad_name"], r"ADC#[a-zA-Z0-9]+")
-            if "actions" in d:
-                for a in d["actions"]:
-                    if a["action_type"] == "lead":
-                        row["leads"] = a["value"]
-                    if a["action_type"] == "purchase":
-                        row["purchases"] = a["value"]
+            for action in d.get("actions", []):
+                row[action["action_type"]] = action["value"]
+            if "actions" in row:
                 del row["actions"]
             writer.writerow(row)
+
+    return None
 
 
 def current_date():
     return datetime.datetime.now().strftime("%Y-%m-%d")
 
 
-def weighted_average(values, weights):
-    "order matters regarding values and weights"
-    if len(values) != len(weights):
-        raise ValueError("The number of values must be equal to the number of weights")
-    if sum(weights) == 0:
-        raise ValueError("The sum of weights cannot be zero")
-    return sum([values[i] * weights[i] for i in range(len(values))]) / sum(weights)
+def logs_date():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def upload_to_clickup(tasks):
