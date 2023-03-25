@@ -28,7 +28,6 @@ class FaceBookDataContainter(BaseLogger):
             "accounts": defaultdict(list),
             "failed_jobs": [],
             "reporting_data": defaultdict(list),
-            "async_reports": defaultdict(list),
             "failed_account_ids": defaultdict(list),
             "rates": defaultdict(dict),
         }
@@ -172,8 +171,6 @@ class FaceBookDataContainter(BaseLogger):
                 return string
             else:
                 string += f" with Result: {result.__class__.__name__}"
-                if not isinstance(result, dict):
-                    return string
                 for k, v in result.items():
                     string += f" {k}: {v},"
             return string
@@ -181,11 +178,21 @@ class FaceBookDataContainter(BaseLogger):
         self.logger.debug(build_string(result))
         return result
 
-    def export_all_reporting_data(self):
+    def export_all_reporting_data_csv(self):
         """
         Exports all data to a csv file.
         """
         for date_preset, data in self.data["reporting_data"].items():
             self.logger.info(f"Writing {date_preset} reporting data to csv")
-            write_ads_to_csv([d.export_all_data() for d in data], f"uploads/{date_preset}.csv")
+            write_ads_to_csv([d.export_all_data() for d in data], f"data/{date_preset}.csv")
+        return self
+
+    def export_all_reporting_data_json(self):
+        """
+        exports all data to a json file
+        """
+        for date_preset, data in self.data["reporting_data"].items():
+            self.logger.info(f"Writing {date_preset} reporting data to csv")
+            with open(f"data/{date_preset}.json", "w") as file:
+                json.dump(data, file, indent=4, default=lambda x: x.export_all_data())
         return self
