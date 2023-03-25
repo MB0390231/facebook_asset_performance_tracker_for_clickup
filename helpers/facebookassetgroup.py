@@ -1,124 +1,94 @@
 from helpers.logging_config import BaseLogger
 from helpers import helpers
+from collections import defaultdict
+from typing import List, Dict
 
 
-class FacebookAssetGroups(BaseLogger):
+class ReportBuilder:
+
     """
-    An AssetGroup is a collection of assets
-    An asset is a regex pattern meant to be found in an objs target_key
+    This class is meant to build reports.
     """
 
-    def __init__(self, data_container) -> None:
-        self.data_container = data_container
-        self.reports = {}
-        return super().__init__()
+    def __init__(self, default_report) -> None:
+        self.default_report = default_report
+        self.report = defaultdict(lambda: self.default_report.copy())
+        return
 
-    # TODO: instead of using asset group attributes, use a dictionary to store the asset groups with the report and data as values
-    def add_asset_group(self, target_key, regex_pattern, asset_group_name):
+    def add_asset(self, asset_name, asset, method):
         """
-        Creates asset_group groups where an asset_group is a regex pattern meant to be found in an objs target_key
-        If the asset group is already created, it refreshes the asset groups data.
-        automatically organizes facebook data from all date presets
-        results in the following dictionary
-        {
-            "date_preset":{
-                "asset_group":data,
-            },
-            "date_preset":{
-                "asset_group":data,
-            }
-        }
-        """
-        # TODO:
-        # set attribute for which ever data set (ex. retailer data or creative data)
-        self.create_asset_group(asset_group_name)
-        group = self.__getattribute__(asset_group_name)
-        for preset in self.data_container.date_presets:
-            for obj in self.data_container.insights_data[preset]:
-                extracted = helpers.extract_regex_expression(obj[target_key], regex_pattern)
-                if extracted:
-                    asset_id = extracted.lower()
-                    if asset_id not in group[preset].keys():
-                        group[preset][asset_id] = [obj]
-                    else:
-                        group[preset][asset_id].append(obj)
-            for keys in group[preset].keys():
-                self.logger.debug(f"Found {len(group[preset][keys])} assets for {keys}")
-        self.logger.info(f"Processed asset group {asset_group_name}")
-        self.generate_asset_report(asset_group_name)
-        return group
+        consolidates the stats of an asset given with the stats already in the report for that asset_name
 
-    def create_asset_group(self, asset_group):
+        asset_name: string used to target the report for an asset
+        asset: asset to add to the targeted report
+        method: method used to consolidate the asset with the target
         """
-        Sets or resets the asset group to be used for the rest of the class
-        """
-        # set attr if not already set
-        if not hasattr(self, f"{asset_group}"):
-            self.__setattr__(f"{asset_group}", {})
+        target = self.report[asset_name]
+        asset = method(target, asset)
+        return
+
+    def get_asset(self, asset_name):
+        if asset_name not in self.report:
+            return self.default_report
+        return self.report[asset_name]
+
+
+def consolidate_facebook_reporting_data(target_stat, obj):
+    """
+    Takes in a report for facebook insights and adsinsights objects and combines the statistics of both.
+    """
+    strategy_mapping = {
+        "spend": (lambda x, y: float(x) + float(y), False),
+        "actions": (combine_actions, False),
+        "inline_link_click_ctr": (weighted_average, True),
+        "cpc": (weighted_average, True),
+        "cpm": (weighted_average, True),
+        "cost_per_inline_link_click": (weighted_average, True),
+    }
+
+    original_spend = float(target_stat["spend"])
+    for metric, (method, requires_weighted_average) in strategy_mapping.items():
+        if metric not in obj:
+            continue
+
+        if requires_weighted_average:
+            values = [target_stat[metric], float(obj[metric])]
+            weights = [original_spend, float(obj["spend"])]
+            target_stat[metric] = method(values=values, weights=weights)
         else:
-            self.__setattr__(f"{asset_group}", {})
-        for dates in self.data_container.date_presets:
-            self.__getattribute__(asset_group)[dates] = {}
-        return
+            target_stat[metric] = method(target_stat[metric], obj[metric])
 
-    def generate_asset_report(self, asset_group):
-        """
-        Generates a report for an asset group for every date_preset that has data. If the asset group has not been generated yet, it raises and attribute error
-        """
-        if not hasattr(self, f"{asset_group}"):
-            raise AttributeError(
-                f"{self.__name__} does not have asset_group: {asset_group}.\n"
-                f"Please generate asset group first using {self.__name__}.facebook_data_organized_by_regex()"
-            )
+    target_stat["count"] += 1
+    return target_stat
 
-        report = {}
-        group = self.__getattribute__(asset_group)
-        for dates in self.data_container.date_presets:
-            report[dates] = {}
-            self.logger.debug(f"Generating report asset group {asset_group} for date preset: {dates}")
-            for keys, value in group[dates].items():
-                report[dates][keys] = self.consolidate_objects_stats(value)
-                self.logger.debug(f"{keys}: {report[dates][keys]}")
-        self.reports[asset_group] = report
-        self.logger.info(f"Generated report for asset group {asset_group}")
-        return
 
-    # TODO: use a mapping to map the keys to the correct function. EX "spend": total(), "CTR": weighted_average()
-    def consolidate_objects_stats(self, list_of_objects):
-        """
-        Creates a dictionary of consolidated stats for a list of objects
-        It is meant to run through a list of objects relating to a single asset group
-        """
-        consolidation = {
-            "count": len(list_of_objects),
-            "actions": {},
-        }
-        # values and weights for weighted average with values being the metric and weights being the spend
-        ctr_values = []
-        weights = []
-        cpm_values = []
-        cpc_values = []
-        for obj in list_of_objects:
-            spend = float(obj["spend"])
-            consolidation["spend"] = consolidation.get("spend", 0) + spend
-            # actions (leads, purchases, ect.)
-            for actions in obj.get("actions", []):
-                consolidation["actions"][actions["action_type"]] = consolidation["actions"].get(
-                    f"{actions['action_type']}", 0
-                ) + float(actions["value"])
+def weighted_average(values, weights):
+    "order matters regarding values and weights"
+    if len(values) != len(weights):
+        raise ValueError("The number of values must be equal to the number of weights")
+    if sum(weights) == 0:
+        raise ValueError("The sum of weights cannot be zero")
+    return sum([values[i] * weights[i] for i in range(len(values))]) / sum(weights)
 
-            # add the values and weights for weighted average
-            weights.append(spend)
-            cpc_values.append(float(obj.get("cpc", 0)))
-            ctr_values.append(float(obj.get("inline_link_click_ctr", 0)))
-            cpm_values.append(float(obj.get("cpm", 0)))
 
-        # calculate cost per actions
-        for actions in consolidation.get("actions", []):
-            consolidation[f"cost_per_{actions}"] = consolidation["spend"] / consolidation["actions"][actions]
+def combine_actions(report: Dict[str, int], list_of_actions_objects: List[Dict[str, str]]) -> Dict[str, int]:
+    """
+    Combines the values of actions in a list of action objects into a report.
 
-        # calculate averages for CPC, CPM, and CTR
-        consolidation["cpc"] = helpers.weighted_average(cpc_values, weights)
-        consolidation["cpm"] = helpers.weighted_average(cpm_values, weights)
-        consolidation["ctr"] = helpers.weighted_average(ctr_values, weights)
-        return consolidation
+    :param report: The initial report to which values will be added.
+    :type report: Dict[str, int]
+    :param list_of_actions_objects: A list of action objects, each containing an "action_type" and a "value".
+    :type list_of_actions_objects: List[Dict[str, str]]
+    :return: The combined report.
+    :rtype: Dict[str, int]
+
+    :Example:
+    >>> combine_actions({"like": 1}, [{"action_type": "like", "value": "2"}, {"action_type": "share", "value": "3"}])
+    {"like": 3, "share": 3}
+    """
+    report = report.copy()
+    for actions in list_of_actions_objects:
+        action = actions["action_type"]
+        value = int(actions["value"])
+        report[action] = report.get(action, 0) + value
+    return report
