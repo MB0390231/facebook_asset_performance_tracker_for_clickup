@@ -1,15 +1,21 @@
 from collections import defaultdict
 from facebook_business.exceptions import FacebookRequestError
-from helpers.helpers import run_async_jobs, extend_list_async, write_ads_to_csv
+from helpers.helpers import (
+    run_async_jobs,
+    extend_list_async,
+    write_dicts_to_csv,
+    generate_reporting_row,
+    generate_rejected_ad_row,
+)
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 from helpers.logging_config import BaseLogger
-import time
+from time import sleep, time
 import json
 
 
-class FaceBookDataContainter(BaseLogger):
+class FaceBookDataContainer(BaseLogger):
     ad_account_status_mapping = {
         "1": "ACTIVE",
         "2": "DISABLED",
@@ -24,13 +30,12 @@ class FaceBookDataContainter(BaseLogger):
     }
 
     def __init__(self):
-        self.data = {
-            "accounts": defaultdict(list),
-            "failed_jobs": [],
-            "reporting_data": defaultdict(list),
-            "failed_account_ids": defaultdict(list),
-            "rates": defaultdict(dict),
-        }
+        self.accounts = defaultdict(list)
+        self.failed_jobs = []
+        self.reporting_data = defaultdict(list)
+        self.ads = []
+        self.failed_account_ids = defaultdict(list)
+        self.rates = defaultdict(dict)
         return super().__init__()
 
     def set_business_ad_accounts(self, business_id, fields=None):
@@ -41,7 +46,7 @@ class FaceBookDataContainter(BaseLogger):
         accounts = self.retrieve_ad_accounts(business_id, fields=fields)
         for account in accounts:
             account_status = str(account["account_status"])
-            self.data["accounts"][self.ad_account_status_mapping[account_status]].append(account)
+            self.accounts[self.ad_account_status_mapping[account_status]].append(account)
             self.logger.debug(
                 f"Added account {account[AdAccount.Field.id]} to business {business_id} with status {account_status}"
             )
@@ -65,25 +70,33 @@ class FaceBookDataContainter(BaseLogger):
             all.extend([account for account in accounts if account["id"] not in seen and not seen.add(account["id"])])
         return all
 
+    def retreve_ads(self, accounts, fields, params):
+        ads, failed_futures = run_async_jobs(accounts, self.call_method, "get_ads", fields, params)
+        self.logger.info(f"Retrieved {len(ads)} ads")
+        self.ads.extend([ad for l in ads for ad in l])
+        self.failed_jobs.extend(failed_futures)
+        return self
+
+    # TODO: refactor this method to be more readable
     def retrieve_facebook_objects_insights(self, facebook_objects, fields, params):
         date_preset = params["date_preset"]
         results, failed_jobs = run_async_jobs(facebook_objects, self.retrieve_insights, fields, params)
-        self.data["failed_jobs"].extend(failed_jobs)
+        self.failed_jobs.extend(failed_jobs)
         accounts = [obj for obj in results if obj.__class__.__name__ == "AdAccount" and not results.remove(obj)]
         if accounts:
             finished_reports_or_accounts, failed_jobs = run_async_jobs(
                 accounts, self.process_async_report, fields, params
             )
             self.logger.info(f"Finished processing async reports ({date_preset})")
-            self.data["failed_jobs"].extend(failed_jobs)
+            self.failed_jobs.extend(failed_jobs)
             accounts = [
                 obj
                 for obj in finished_reports_or_accounts
                 if obj.__class__.__name__ == "AdAccount" and not finished_reports_or_accounts.remove(obj)
             ]
             results.extend(finished_reports_or_accounts)
-            self.data["failed_account_ids"][date_preset].extend(accounts)
-        run_async_jobs(results, extend_list_async, self.data["reporting_data"][date_preset])
+            self.failed_account_ids[date_preset].extend(accounts)
+        run_async_jobs(results, extend_list_async, self.reporting_data[date_preset])
         self.logger.info(f"Finished retrieving insights ({date_preset})")
         return self
 
@@ -119,7 +132,7 @@ class FaceBookDataContainter(BaseLogger):
             self.logger.info(
                 f"Async report for facebook object id: {facebook_object['id']} failed with a async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
             )
-            time.sleep(initial_delay)
+            sleep(initial_delay)
             initial_delay *= 2
         return
 
@@ -127,14 +140,14 @@ class FaceBookDataContainter(BaseLogger):
         """
         Processes async reports and returns the results. There is timeout of 10 minutes.
         """
-        end_time = time.time() + timeout
+        end_time = time() + timeout
         report = self.call_method(report, "api_get")
         while (
             report[AdReportRun.Field.async_status] in ["Job Running", "Job Not Started", "Job Started"]
-            and time.time() < end_time
+            and time() < end_time
         ):
             report = self.call_method(report, "api_get")
-            time.sleep(10)
+            sleep(10)
         return report
 
     def extract_business_use_case_usage(self, headers):
@@ -146,7 +159,7 @@ class FaceBookDataContainter(BaseLogger):
             call_count = data[0]["call_count"]
             total_cputime = data[0]["total_cputime"]
             estimated_time_to_regain_access = data[0]["estimated_time_to_regain_access"]
-            self.data["rates"][account_id] = {
+            self.rates[account_id] = {
                 "type": type,
                 "call_count": call_count,
                 "total_cputime": total_cputime,
@@ -182,17 +195,27 @@ class FaceBookDataContainter(BaseLogger):
         """
         Exports all data to a csv file.
         """
-        for date_preset, data in self.data["reporting_data"].items():
+
+        for date_preset, data in self.reporting_data.items():
+            fieldnames = {key for d in data for key in d.keys()}
+            fieldnames |= {"lead", "purchase"}
             self.logger.info(f"Writing {date_preset} reporting data to csv")
-            write_ads_to_csv([d.export_all_data() for d in data], f"data/{date_preset}.csv")
+            write_dicts_to_csv(
+                self.reporting_data[date_preset], fieldnames, generate_reporting_row, f"data/{date_preset}.csv"
+            )
+        if self.ads:
+            fieldnames = {key for ad in self.ads for key in ad.keys()}
+            fieldnames |= {"retailer_id", "creative_id", "copy_id"}
+            write_dicts_to_csv(self.ads, fieldnames, generate_rejected_ad_row, "data/ads_with_issues.csv")
         return self
 
     def export_all_reporting_data_json(self):
         """
         exports all data to a json file
         """
-        for date_preset, data in self.data["reporting_data"].items():
+        for date_preset, data in self.reporting_data.items():
             self.logger.info(f"Writing {date_preset} reporting data to csv")
             with open(f"data/{date_preset}.json", "w") as file:
                 json.dump(data, file, indent=4, default=lambda x: x.export_all_data())
+
         return self

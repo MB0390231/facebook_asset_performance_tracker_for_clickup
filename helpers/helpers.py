@@ -5,6 +5,9 @@ import re
 import csv
 import datetime
 from helpers.logging_config import BaseLogger
+import csv
+from typing import Callable, Dict, List, Any
+
 
 logger = BaseLogger(name="helpers")
 
@@ -97,45 +100,58 @@ def count_objects(d):
     return count
 
 
-def write_ads_to_csv(data, filename):
+def write_dicts_to_csv(
+    dict_list: List[Dict[str, Any]],
+    fieldnames: List[str],
+    generate_row: Callable[[Dict[str, Any]], Dict[str, Any]],
+    file_name: str,
+) -> None:
     """
-    Write ad data to a CSV file, with additional columns for extracted information.
+    Write a list of dictionaries to a CSV file using the specified fieldnames and row generation function.
 
-    Parameters:
-        - data (list of dict): A list of dictionaries, where each dictionary represents ad data.
-        - filename (str): The name of the CSV file to write to.
-
-    Returns:
-        - None
-
-    The function extracts the retailer ID and creative ID from the ad name and adds them as new columns to the CSV file. The function also extracts the number of leads and purchases from the "actions" key in each ad's dictionary and adds them as new columns to the CSV file. All other data from the ad dictionaries is written to the CSV file as-is.
-
+    Args:
+        dict_list (List[Dict[str, Any]]): A list of dictionaries to write to the CSV file.
+        fieldnames (List[str]): A list of fieldnames (column names) for the CSV file.
+        generate_row (Callable[[Dict[str, Any]], Dict[str, Any]]): A function that takes a dictionary from dict_list and generates a row.
+        file_name (str): The name of the CSV file to write the data to.
     """
-
-    unique_keys = set().union(*(set(d.keys()) for d in data))
-    unique_keys -= {"actions"}
-    unique_keys |= {"leads", "purchases", "creative_id", "retailer_id", "copy_id"}
-    # add action types from actions to unique_keys
-    for d in data:
-        for action in d.get("actions", []):
-            unique_keys.add(action["action_type"])
-
-    fieldsnames = sorted(list(unique_keys))
-    with open(filename, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldsnames)
+    # Write dictionaries to a CSV file
+    with open(file_name, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
-        for d in data:
-            row = d.copy()
-            row["retailer_id"] = extract_regex_expression(d["ad_name"], r"^\d{3}")
-            row["creative_id"] = extract_regex_expression(d["ad_name"], r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+")
-            row["copy_id"] = extract_regex_expression(d["ad_name"], r"ADC#[a-zA-Z0-9]+")
-            for action in d.get("actions", []):
-                row[action["action_type"]] = action["value"]
-            if "actions" in row:
-                del row["actions"]
+        for d in dict_list:
+            row = generate_row(d)
             writer.writerow(row)
-
     return None
+
+
+def extract_action_types_and_values(d: Dict[str, Any]) -> Dict[str, Any]:
+    actions = {}
+    for action in d.get("actions", []):
+        if action["action_type"] in ["lead", "purchase"]:
+            actions[action["action_type"]] = action["value"]
+    return actions
+
+
+def generate_reporting_row(d: Dict[str, Any]) -> Dict[str, Any]:
+    row = {key: d[key] for key in d if key != "actions"}
+    row.update(extract_action_types_and_values(d))
+    return row
+
+
+def generate_rejected_ad_row(d: Dict[str, Any]) -> Dict[str, Any]:
+    row = {key: d[key] for key in d}
+    row.update(extract_assets(d["name"]))
+    return row
+
+
+def extract_assets(name: str) -> Dict[str, str]:
+    asset_mapping = {
+        "retailer_id": extract_regex_expression(name, r"^\d{3}"),
+        "creative_id": extract_regex_expression(name, r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+"),
+        "copy_id": extract_regex_expression(name, r"ADC#[a-zA-Z0-9]+"),
+    }
+    return asset_mapping
 
 
 def current_date():
