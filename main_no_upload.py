@@ -99,4 +99,4 @@ for task in COPY_TRACKER_TASKS:
     POOL.create_ads_with_issues_jobs(task, COPY_TRACKER_FIELDS, ISSUES_REPORT)
 
 # upload runtime_logs
-upload_to_clickup(INFORMATION.get_tasks)
+upload_to_clickup(INFORMATION.get_tasks())
