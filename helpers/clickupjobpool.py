@@ -26,13 +26,15 @@ class ClickupJobPool(BaseLogger):
     # mapping of custom field names to insights fields. Used to correlate custom fields to insights fields.
     insights_field_mapping = {
         "leads": ("actions", "lead"),
+        "spend": "spend",
         "purchases": ("actions", "purchase"),
         "cpl": "cost_per_lead",
         "cpp": "cost_per_purchase",
-        "cost_per_inline_link_click": "cpc",
+        "cpc": "cost_per_inline_link_click",
         "cpm": "cpm",
-        "inline_link_click_ctr": "ctr",
+        "ctr": "inline_link_click_ctr",
         "count": "count",
+        "issues": "issues",
     }
 
     date_mapping = {
@@ -99,6 +101,26 @@ class ClickupJobPool(BaseLogger):
             # create the job
             if value:
                 value = round(value, 2)
+            self.jobs.append((task["id"], id, value))
+            self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {value}")
+        return
+
+    def create_ads_with_issues_jobs(
+        self, task, custom_fields, asset_data, asset_match_type="name", custom_field_location=None
+    ):
+        for fields, id in custom_fields.items():
+            if fields.lower() != "issues":
+                continue
+            if asset_match_type == "name":
+                asset = task["name"].lower()
+            elif asset_match_type == "custom_field":
+                asset = [
+                    field["value"]
+                    for field in task["custom_fields"]
+                    if field["name"].lower() == custom_field_location.lower()
+                ][0].lower()
+
+            value = asset_data[asset]["issues"]
             self.jobs.append((task["id"], id, value))
             self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {value}")
         return
