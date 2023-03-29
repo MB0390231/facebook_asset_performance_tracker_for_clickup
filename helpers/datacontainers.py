@@ -219,3 +219,131 @@ class FaceBookDataContainer(BaseLogger):
                 json.dump(data, file, indent=4, default=lambda x: x.export_all_data())
 
         return self
+
+
+class GHLDataContainer(BaseLogger):
+    def __init__(self, agency):
+        self.agency = agency
+        self.locations = []
+        self.calendars = {}
+        self.appointments = defaultdict(list)
+        self.failed_futures = []
+        super().__init__()
+
+    def set_locations(self):
+        locations = self.agency.get_locations()
+        self.locations = locations
+        return self
+
+    def set_location_calendars(self, locations):
+        self.logger.info("Retreiving Calendars")
+        complete = False
+        attempts = 0
+        initial_delay = 5
+        jobs = locations
+        while not complete or attempts < 3:
+            success, failed = run_async_jobs(jobs, lambda job: (job["id"], job.get_calendar_services()))
+            for location_id, location_calendars in success:
+                self.calendars[location_id] = location_calendars
+            if not failed:
+                break
+            jobs = [job[0] for job in failed]
+            attempts += 1
+            sleep(initial_delay)
+            initial_delay *= 2
+        if failed:
+            self.failed_futures.extend(failed)
+        self.logger.info(f"Successfully retrieved {len(locations)-len(failed)} of {len(locations)}")
+        return self
+
+    def set_location_appointments(self, appointment_params):
+        self.logger.info("Retreiving Appointments")
+        for location_id, calendars in self.calendars.items():
+            appts = []
+            for calendar in calendars:
+                query = self.retrieve_calendar_appointments(calendar, appointment_params)
+                if not query:
+                    continue
+                appts.extend(query)
+                self.logger.debug(f"Retrieved {len(query)} appointments for calender id: {calendar['id']}")
+            self.appointments[location_id] = appts
+            self.logger.info(f"Retrieved {len(appts)} for location id: {location_id}")
+        return self
+
+    def retrieve_calendar_appointments(self, calendar, appointment_params):
+        attempts = 0
+        while True and attempts <= 3:
+            try:
+                query = calendar.get_appointments(appointment_params)
+                return query
+            except Exception as e:
+                self.logger.exception(e, exc_info=True)
+                self.logger.debug(f"Retrying for calendar id: {calendar['id']}. Attempted {attempts} of 3")
+                attempts += 1
+                sleep(5)
+        self.logger.error(f"Failed to retrieve appointments for calendar id: {calendar['id']}")
+        return None
+
+    def export_all_data_csv(self):
+        """
+        Exports all data to a csv file.
+        """
+        self.logger.info("Writing all data to csv")
+        self.export_locations_csv()
+        self.export_calendars_csv()
+        self.export_appointments_csv()
+        return self
+
+    def export_calendars_csv(self):
+        fieldnames = {
+            key for calendar_list in self.calendars.values() for calendar in calendar_list for key in calendar.keys()
+        }
+        write_dicts_to_csv(
+            [cal for cal_list in self.calendars.values() for cal in cal_list],
+            fieldnames,
+            lambda cal: {key: cal[key] for key in cal},
+            "data/calendars.csv",
+        )
+        return self
+
+    def export_locations_csv(self):
+        fieldnames = {key for location in self.locations for key in location.keys()}
+        write_dicts_to_csv(
+            self.locations, fieldnames, lambda loc: {key: loc[key] for key in loc}, "data/locations.csv"
+        )
+        return self
+
+    def export_appointments_csv(self):
+        fieldnames = {key for appt_list in self.appointments.values() for appt in appt_list for key in appt.keys()}
+        write_dicts_to_csv(
+            [appt for appt_list in self.appointments.values() for appt in appt_list],
+            fieldnames,
+            lambda appt: {key: appt[key] for key in appt},
+            "data/appointments.csv",
+        )
+        return self
+
+    def export_all_data_json(self):
+        """
+        Exports all data to a json file.
+        """
+        self.logger.info("Writing all data to json")
+        self.export_locations_json()
+        self.export_calendars_json()
+        self.export_appointments_json()
+        return self
+
+    def export_calendars_json(self):
+        with open("data/calendars.json", "w") as file:
+            json.dump(self.calendars, file, indent=4, default=lambda x: x.export_all_data())
+        return self
+
+    def export_locations_json(self):
+        with open("data/locations.json", "w") as file:
+            json.dump(self.locations, file, indent=4, default=lambda x: x.export_all_data())
+        return self
+
+    def export_appointments_json(self):
+        with open("data/appointments.json", "w") as file:
+            json.dump(self.appointments, file, indent=4, default=lambda x: x.export_all_data())
+        return self
