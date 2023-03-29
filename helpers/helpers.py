@@ -6,10 +6,18 @@ import csv
 import datetime
 from helpers.logging_config import BaseLogger
 import csv
-from typing import Callable, Dict, List, Any
+from time import mktime, sleep
+from typing import Callable, Dict, List, Any, Optional, Union
 
 
 logger = BaseLogger(name="helpers")
+
+
+def week_ago_epoch_timestamp():
+    now = datetime.datetime.now()
+    week_ago = now - datetime.timedelta(weeks=1)
+    epoch_week_ago = int(mktime(week_ago.timetuple()))
+    return epoch_week_ago
 
 
 def convert_timestamp_to_date(timestamp):
@@ -17,17 +25,32 @@ def convert_timestamp_to_date(timestamp):
     return date
 
 
+def current_date():
+    return datetime.datetime.now().strftime("%Y-%m-%d")
+
+
+def logs_date():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 # REGEX
-def extract_regex_expression(string, expression):
+def extract_regex_expression(string: str, expression: str) -> Optional[str]:
     """
     Extracts a substring from `string` using a regular expression `expression`.
 
-    Parameters:
-        - string (str): The input string from which to extract a substring.
-        - expression (str): A string representing a regular expression that will be used to extract a substring from `string`.
+    Args:
+        string (str): The input string from which to extract a substring.
+        expression (str): A string representing a regular expression that will be used to extract a substring from `string`.
 
     Returns:
-        - match (str or None): If a match is found, the extracted substring is returned. Otherwise, `None` is returned.
+        Optional[str]: If a match is found, the extracted substring is returned. Otherwise, `None` is returned.
+
+    Example:
+        string = "This is a sample string"
+        expression = r"\b\w+\b"
+        result = extract_regex_expression(string, expression)
+        print(result)
+        # Output: 'This'
     """
     pattern = re.compile(expression)
     match = re.search(pattern, string)
@@ -40,28 +63,62 @@ def extract_regex_expression(string, expression):
 # THREADS
 
 
-def extend_list_async(cursor, list):
-    len_before = len(list)
-    if cursor.__class__.__name__ != "Cursor":  # assume adreport run
-        cursor = cursor.get_result(params={"limit": 300})
-    with Lock():
-        list.extend(cursor)
-    len_after = len(list)
-    logger.logger.debug(f"Extended list from {len_before} to {len_after}")
-    return None
+def extend_list_async(cursor, result_list: List) -> None:
+    """
+    Extends a list with the contents of a cursor asynchronously.
+
+    Args:
+    cursor (Union[Cursor, adreport.Cursor]): The cursor object to extract data from.
+    result_list (List): The list to be extended with the contents of the cursor.
+
+    Returns:
+        None
+
+    Example:
+        result_list = []
+        cursor = [1, 2, 3, 4, 5]
+        extend_list_async(cursor, result_list)
+        print(result_list)
+        # Output: [1, 2, 3, 4, 5]
+    """
+    # try twice because facebook sometimes gives an error with no other information than "unknown error"
+    try:
+        len_before = len(result_list)
+        with Lock():
+            result_list.extend(cursor)
+        len_after = len(result_list)
+        logger.logger.debug(f"Extended list from {len_before} to {len_after}")
+    except:
+        sleep(1)
+        len_before = len(result_list)
+        with Lock():
+            result_list.extend(cursor)
+        len_after = len(result_list)
+        logger.logger.debug(f"Extended list from {len_before} to {len_after}")
+    return
 
 
 def run_async_jobs(jobs, job_fn, *args, **kwargs):
     """
-    Run a list of jobs asynchronously using threads.
+    Runs a list of jobs asynchronously using a thread pool.
 
-    Parameters:
-        - jobs (list): A list of jobs to run.
-        - job_fn (function): The function to run for each job.
-        - *args (tuple): A tuple of arguments to pass to the job function.
+    Args:
+        jobs (List): A list of jobs to be executed.
+        job_fn (Callable): A function that will be used to execute each job.
+        *args: Arguments to be passed to `job_fn` for each job.
+        **kwargs: Keyword arguments to be passed to `job_fn` for each job.
 
     Returns:
-        - tuple: A tuple containing a list of success and a list of fail.
+        Tuple[List, List]: A tuple containing two lists. The first list contains the results of the successful jobs. The second list contains the jobs that failed, represented as tuples of (job, job_fn, args, kwargs).
+
+    Example:
+        def job_fn(job):
+            return job * 2
+
+        jobs = [1, 2, 3, 4, 5]
+        success, fail = run_async_jobs(jobs, job_fn)
+        print(success)
+        # Output: [2, 4, 6, 8, 10]
     """
     success = []
     fail = []
@@ -107,15 +164,29 @@ def write_dicts_to_csv(
     file_name: str,
 ) -> None:
     """
-    Write a list of dictionaries to a CSV file using the specified fieldnames and row generation function.
+    Writes a list of dictionaries to a CSV file.
 
     Args:
-        dict_list (List[Dict[str, Any]]): A list of dictionaries to write to the CSV file.
-        fieldnames (List[str]): A list of fieldnames (column names) for the CSV file.
-        generate_row (Callable[[Dict[str, Any]], Dict[str, Any]]): A function that takes a dictionary from dict_list and generates a row.
-        file_name (str): The name of the CSV file to write the data to.
+        dict_list (List[Dict[str, Any]]): A list of dictionaries to be written to the CSV file.
+        fieldnames (List[str]): The names of the fields for each row of the CSV file.
+        generate_row (Callable[[Dict[str, Any]], Dict[str, Any]]): A function that takes in a dictionary and returns a dictionary, used to generate each row of the CSV file.
+        file_name (str): The name of the CSV file to be written.
+
+    Returns:
+        None
+
+    Example:
+        dict_list = [{"field1": "value1", "field2": "value2"}, {"field1": "value3", "field2": "value4"}]
+        fieldnames = ["field1", "field2"]
+        generate_row = lambda x: x
+        file_name = "example.csv"
+        write_dicts_to_csv(dict_list, fieldnames, generate_row, file_name)
+
+        # Output: Creates a file "example.csv" with the following contents:
+        # field1,field2
+        # value1,value2
+        # value3,value4
     """
-    # Write dictionaries to a CSV file
     with open(file_name, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -126,6 +197,27 @@ def write_dicts_to_csv(
 
 
 def extract_action_types_and_values(d: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extracts the action types "lead" and "purchases" and their values from a dictionary.
+
+    Args:
+        d (Dict[str, Any]): The dictionary from which to extract the action types and values.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the extracted action types and values.
+
+    Example:
+    d = {
+        "actions": [
+            {"action_type": "lead", "value": 1},
+            {"action_type": "purchase", "value": 2},
+            {"action_type": "view", "value": 3},
+        ]
+    }
+    result = extract_action_types_and_values(d)
+    print(result)
+    # Output: {'lead': 1, 'purchase': 2}
+    """
     actions = {}
     for action in d.get("actions", []):
         if action["action_type"] in ["lead", "purchase"]:
@@ -134,32 +226,90 @@ def extract_action_types_and_values(d: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def generate_reporting_row(d: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generates a reporting row from a dictionary.
+
+    Args:
+        d (Dict[str, Any]): The input dictionary from which to generate the reporting row.
+
+    Returns:
+        Dict[str, Any]: The generated reporting row.
+
+    Example:
+        d = {
+            "spend": 20.0,
+            "actions": [
+                {"action_type": "lead", "value": 1},
+                {"action_type": "purchase", "value": 2},
+            ],
+        }
+        result = generate_reporting_row(d)
+        print(result)
+        # Output: {'spend': 20.0, 'lead': 1, 'purchase': 2}
+    """
     row = {key: d[key] for key in d if key != "actions"}
     row.update(extract_action_types_and_values(d))
     return row
 
 
 def generate_rejected_ad_row(d: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generates a rejected ad row from a dictionary.
+
+    Args:
+        d (Dict[str, Any]): The input dictionary from which to generate the rejected ad row.
+
+    Returns:
+        Dict[str, Any]: The generated rejected ad row.
+
+    Example:
+        d = {
+            "name": "123_VID#12345_ADC#67890",
+            "spend": 20.0,
+        }
+        result = generate_rejected_ad_row(d)
+        print(result)
+        # Output: {'name': '123_VID#12345_ADC#67890', 'spend': 20.0, 'retailer_id': '123', 'creative_id': 'VID#12345', 'copy_id': 'ADC#67890'}
+    """
     row = {key: d[key] for key in d}
-    row.update(extract_assets(d["name"]))
+    row.update(
+        extract_assets(d["name"]),
+        {
+            "retailer_id": r"^\d{3}",
+            "creative_id": r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+",
+            "copy_id": r"ADC#[a-zA-Z0-9]+",
+        },
+    )
     return row
 
 
-def extract_assets(name: str) -> Dict[str, str]:
-    asset_mapping = {
-        "retailer_id": extract_regex_expression(name, r"^\d{3}"),
-        "creative_id": extract_regex_expression(name, r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+"),
-        "copy_id": extract_regex_expression(name, r"ADC#[a-zA-Z0-9]+"),
-    }
+def extract_assets(name: str, assets: Dict[str, str]) -> Dict[str, str]:
+    """
+    Extracts assets from a given name based on a dictionary of asset regex patterns.
+
+    Args:
+        name (str): The string from which to extract assets.
+        assets (Dict[str, str]): A dictionary containing asset names as keys and their regex patterns as values.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the extracted assets as key-value pairs.
+
+    Examples:
+        assets = {
+            "retailer_id": r"^\d{3}",
+            "creative_id": r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+",
+            "copy_id": r"ADC#[a-zA-Z0-9]+",
+        }
+        extract_assets("001VID#abcdADC#efgh", assets)
+        {'retailer_id': '001', 'creative_id': 'VID#abcd', 'copy_id': 'ADC#efgh'}
+    """
+
+    def extract_regex_expression(text: str, pattern: str) -> str:
+        match = re.search(pattern, text)
+        return match.group(0) if match else ""
+
+    asset_mapping = {asset: extract_regex_expression(name, pattern) for asset, pattern in assets.items()}
     return asset_mapping
-
-
-def current_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
-
-
-def logs_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def upload_to_clickup(tasks):
@@ -176,3 +326,4 @@ def upload_to_clickup(tasks):
             print(f"Uploaded file for task {task['name']}")
         except Exception as e:
             print(f"No file to upload for task {task['name']}")
+    return None
