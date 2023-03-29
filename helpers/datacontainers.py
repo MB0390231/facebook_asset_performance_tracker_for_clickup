@@ -34,7 +34,7 @@ class FaceBookDataContainer(BaseLogger):
         self.failed_jobs = []
         self.reporting_data = defaultdict(list)
         self.ads = []
-        self.failed_account_ids = defaultdict(list)
+        self.failed_accounts = defaultdict(list)
         self.rates = defaultdict(dict)
         return super().__init__()
 
@@ -95,7 +95,9 @@ class FaceBookDataContainer(BaseLogger):
                 if obj.__class__.__name__ == "AdAccount" and not finished_reports_or_accounts.remove(obj)
             ]
             results.extend(finished_reports_or_accounts)
-            self.failed_account_ids[date_preset].extend(accounts)
+            self.failed_accounts[date_preset].extend(accounts)
+        for result in results:
+            self.extract_business_use_case_usage(result.headers())
         run_async_jobs(results, extend_list_async, self.reporting_data[date_preset])
         self.logger.info(f"Finished retrieving insights ({date_preset})")
         return self
@@ -118,23 +120,22 @@ class FaceBookDataContainer(BaseLogger):
     def process_async_report(self, facebook_object, fields, params, max_attempts=5, initial_delay=60):
         # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
         attempts = 0
-        first_run = True
-        while first_run or report[AdReportRun.Field.async_status] != "Job Completed" and attempts <= max_attempts:
-            if first_run:
-                first_run = False
+        self.logger.info(f"Processing Async report for object id: {facebook_object['id']}.")
+        while attempts <= max_attempts:
             report = self.call_method(facebook_object, "get_insights_async", fields, params)
             report = self.wait_for_job(report)
-            attempts += 1
             if report[AdReportRun.Field.async_status] == "Job Completed":
-                return report
-            if attempts > max_attempts:
-                return facebook_object
+                return report.get_result(params={"limit": 300})
             self.logger.info(
-                f"Async report for facebook object id: {facebook_object['id']} failed with a async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
+                f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
             )
             sleep(initial_delay)
+            attempts += 1
             initial_delay *= 2
-        return
+        self.logger.info(
+            f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}"
+        )
+        return facebook_object
 
     def wait_for_job(self, report, timeout=600):
         """
@@ -173,9 +174,6 @@ class FaceBookDataContainer(BaseLogger):
         """
         method = getattr(object, method_name)
         result = method(*args, **kwargs)
-        # TODO - this is a hack to get the business use case usage data. Need to find a better way to do this.
-        if method_name == "get_insights":
-            self.extract_business_use_case_usage(result.headers())
 
         def build_string(result):
             string = f"Called method: {method_name} on object: {object.__class__.__name__}"
@@ -217,7 +215,8 @@ class FaceBookDataContainer(BaseLogger):
             self.logger.info(f"Writing {date_preset} reporting data to csv")
             with open(f"data/{date_preset}.json", "w") as file:
                 json.dump(data, file, indent=4, default=lambda x: x.export_all_data())
-
+        with open("data/ads_with_issues.json", "w") as f:
+            json.dump(self.ads, f, default=lambda x: x.export_all_data(), indent=4)
         return self
 
 
