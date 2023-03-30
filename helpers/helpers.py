@@ -8,9 +8,38 @@ from helpers.logging_config import BaseLogger
 import csv
 from time import mktime, sleep
 from typing import Callable, Dict, List, Any, Optional, Union
-
+from datetime import timedelta, datetime
 
 logger = BaseLogger(name="helpers")
+
+
+def generate_datetime_string(day_delta):
+    """
+    Generate a datetime string representing a target date.
+
+    Parameters:
+        - day_delta (int): The number of days before or after today to generate the target date.
+
+    Returns:
+        - datetime_string (str): A string representation of the target date in the format "YYYY-MM-DD HH:MM:SS"."""
+    target_date = datetime.now() + timedelta(days=day_delta)
+    if day_delta >= 0:
+        return target_date.strftime("%Y-%m-%d 23:59:59")
+    else:
+        return target_date.strftime("%Y-%m-%d 00:00:00")
+
+
+def datetime_to_epoch(datetime_string):
+    """Converts a datetime string to an epoch timestamp.
+
+    Arguments:
+        - datetime_string -- A string in the format "YYYY-MM-DD HH:MM:SS".
+
+    Returns:
+        - An integer representing the number of seconds elapsed since 1970-01-01 00:00:00 (the epoch).
+    """
+    datetime_obj = datetime.strptime(datetime_string, "%Y-%m-%d %H:%M:%S")
+    return int(datetime_obj.timestamp() * 1000)
 
 
 def week_ago_epoch_timestamp():

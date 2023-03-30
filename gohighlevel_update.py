@@ -4,8 +4,7 @@ from clickup_python_sdk.clickupobjects.folder import Folder
 from helpers.datacontainers import GHLDataContainer
 from helpers.reportbuilder import ReportBuilder, process_appointments
 from helpers.clickupjobpool import ClickupJobPool
-from utils import datetime_to_epoch, generate_datetime_string, current_date
-
+from helpers.helpers import datetime_to_epoch, generate_datetime_string, current_date
 import os
 
 GHL_KEY = os.environ.get("GHL_KEY")
