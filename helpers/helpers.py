@@ -43,23 +43,23 @@ def datetime_to_epoch(datetime_string):
 
 
 def week_ago_epoch_timestamp():
-    now = datetime.datetime.now()
-    week_ago = now - datetime.timedelta(weeks=1)
+    now = datetime.now()
+    week_ago = now - timedelta(weeks=1)
     epoch_week_ago = int(mktime(week_ago.timetuple()))
     return epoch_week_ago
 
 
 def convert_timestamp_to_date(timestamp):
-    date = datetime.datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+    date = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
     return date
 
 
 def current_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def logs_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # REGEX
