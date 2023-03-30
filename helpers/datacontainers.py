@@ -82,20 +82,24 @@ class FaceBookDataContainer(BaseLogger):
         date_preset = params["date_preset"]
         results, failed_jobs = run_async_jobs(facebook_objects, self.retrieve_insights, fields, params)
         self.failed_jobs.extend(failed_jobs)
-        accounts = [obj for obj in results if obj.__class__.__name__ == "AdAccount" and not results.remove(obj)]
+        accounts = []
+        for obj in results:
+            if obj.__class__.__name__ == "AdAccount":
+                accounts.append(obj)
+                results.remove(obj)
         if accounts:
             finished_reports_or_accounts, failed_jobs = run_async_jobs(
                 accounts, self.process_async_report, fields, params
             )
+            failed_accounts = []
+            for obj in finished_reports_or_accounts:
+                if obj.__class__.__name__ == "AdAccount":
+                    failed_accounts.append(obj)
+                    finished_reports_or_accounts.remove(obj)
             self.logger.info(f"Finished processing async reports ({date_preset})")
             self.failed_jobs.extend(failed_jobs)
-            accounts = [
-                obj
-                for obj in finished_reports_or_accounts
-                if obj.__class__.__name__ == "AdAccount" and not finished_reports_or_accounts.remove(obj)
-            ]
             results.extend(finished_reports_or_accounts)
-            self.failed_accounts[date_preset].extend(accounts)
+            self.failed_accounts[date_preset].extend(failed_accounts)
         for result in results:
             self.extract_business_use_case_usage(result.headers())
         run_async_jobs(results, extend_list_async, self.reporting_data[date_preset])
@@ -121,21 +125,25 @@ class FaceBookDataContainer(BaseLogger):
         # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
         attempts = 0
         self.logger.info(f"Processing Async report for object id: {facebook_object['id']}.")
-        while attempts <= max_attempts:
-            report = self.call_method(facebook_object, "get_insights_async", fields, params)
-            report = self.wait_for_job(report)
-            if report[AdReportRun.Field.async_status] == "Job Completed":
-                return report.get_result(params={"limit": 300})
+        try:
+            while attempts <= max_attempts:
+                report = self.call_method(facebook_object, "get_insights_async", fields, params)
+                report = self.wait_for_job(report)
+                if report[AdReportRun.Field.async_status] == "Job Completed":
+                    return report.get_result(params={"limit": 300})
+                self.logger.info(
+                    f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
+                )
+                sleep(initial_delay)
+                attempts += 1
+                initial_delay *= 2
             self.logger.info(
-                f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
+                f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}"
             )
-            sleep(initial_delay)
-            attempts += 1
-            initial_delay *= 2
-        self.logger.info(
-            f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}"
-        )
-        return facebook_object
+            return facebook_object
+        except FacebookRequestError as e:
+            self.logger.exception(e)
+            return facebook_object
 
     def wait_for_job(self, report, timeout=600):
         """
