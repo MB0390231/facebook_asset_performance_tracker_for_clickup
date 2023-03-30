@@ -125,6 +125,22 @@ class ClickupJobPool(BaseLogger):
             self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {value}")
         return
 
+    def create_ghl_jobs(self, task, custom_fields, asset_data):
+        for fields, id in custom_fields.items():
+            if fields.lower() not in ["appt 7", "appt fut"]:
+                continue
+            try:
+                loc_id = [field["value"] for field in task["custom_fields"] if field["name"].lower() == "location id"][
+                    0
+                ]
+            # key error or index error
+            except KeyError or IndexError:
+                continue
+            value = asset_data[loc_id][fields.lower()]
+            self.jobs.append((task["id"], id, value))
+            self.logger.debug(f"Created job for asset: {loc_id} {fields}: {id} value: {value}")
+        return
+
     def process_clickup_jobs(self):
         """
         Executes a batch of jobs by updating custom fields in a task using a `ClickupClient` object.
