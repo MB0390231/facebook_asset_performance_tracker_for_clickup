@@ -100,3 +100,8 @@ for task in COPY_TRACKER_TASKS:
 
 # upload runtime_logs
 upload_to_clickup(INFORMATION.get_tasks())
+
+if FB.failed_accounts:
+    print("Failed to retrieve data for the following accounts:")
+for accounts in FB.failed_accounts:
+    print(f"    Failed to retrieve data for {accounts['name']}")

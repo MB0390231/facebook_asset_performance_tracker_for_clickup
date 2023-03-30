@@ -112,10 +112,10 @@ class FaceBookDataContainer(BaseLogger):
             return cursor
         except FacebookRequestError as e:
             error = e.body()["error"]
-            if error.get("code", None) in [1, 100]:  # async needed
+            if error.get("code", None) in [1, 2, 100]:  # async needed
                 return facebook_object
             self.logger.exception(e)
-            return
+            return facebook_object
 
     def process_async_report(self, facebook_object, fields, params, max_attempts=5, initial_delay=60):
         # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
