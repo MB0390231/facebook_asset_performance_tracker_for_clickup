@@ -7,17 +7,25 @@ def current_date():
 
 
 class BaseLogger:
+    loggers_dict = {}
+
     def __init__(self, name=None, console_level=logging.INFO):
         if name is None:
             name = self.__class__.__name__
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.DEBUG)
 
-        file_handler = logging.FileHandler(f"logs/{current_date()}.log", "a")
-        file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
-        self.logger.addHandler(file_handler)
+        if name in self.loggers_dict:
+            self.logger = self.loggers_dict[name]
+        else:
+            self.logger = logging.getLogger(name)
+            self.logger.setLevel(logging.DEBUG)
 
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(console_level)
-        console_handler.setFormatter(logging.Formatter("%(message)s"))
-        self.logger.addHandler(console_handler)
+            file_handler = logging.FileHandler(f"logs/{current_date()}.log", "a")
+            file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
+            self.logger.addHandler(file_handler)
+
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(console_level)
+            console_handler.setFormatter(logging.Formatter("%(message)s"))
+            self.logger.addHandler(console_handler)
+
+            self.loggers_dict[name] = self.logger
