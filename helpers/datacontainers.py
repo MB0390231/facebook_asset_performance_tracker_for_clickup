@@ -92,7 +92,7 @@ class FaceBookDataContainer(BaseLogger):
                 async_needed_accounts, self.process_async_report, fields, params
             )
             # accounts that have failed after retrying multiple times
-            failed_accounts = [acct for acct in result if isinstance(acct, AdAccount)]
+            failed_accounts = [acct for acct in finished_reports_or_accounts if isinstance(acct, AdAccount)]
             self.failed_jobs.extend([*failed_jobs, failed_async_jobs])
             results.extend(finished_reports_or_accounts)
             self.failed_accounts[date_preset].extend(failed_accounts)
