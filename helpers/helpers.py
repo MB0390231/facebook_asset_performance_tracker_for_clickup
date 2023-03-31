@@ -302,12 +302,14 @@ def generate_rejected_ad_row(d: Dict[str, Any]) -> Dict[str, Any]:
     """
     row = {key: d[key] for key in d}
     row.update(
-        extract_assets(d["name"]),
-        {
-            "retailer_id": r"^\d{3}",
-            "creative_id": r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+",
-            "copy_id": r"ADC#[a-zA-Z0-9]+",
-        },
+        extract_assets(
+            d["name"],
+            {
+                "retailer_id": r"^\d{3}",
+                "creative_id": r"VID#[a-zA-Z0-9]+|IMG#[a-zA-Z0-9]+",
+                "copy_id": r"ADC#[a-zA-Z0-9]+",
+            },
+        ),
     )
     return row
 
