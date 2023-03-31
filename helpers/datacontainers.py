@@ -10,6 +10,7 @@ from helpers.helpers import (
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
+from facebook_business.api import Cursor
 from helpers.logging_config import BaseLogger
 from time import sleep, time
 import json
@@ -80,26 +81,24 @@ class FaceBookDataContainer(BaseLogger):
     # TODO: refactor this method to be more readable
     def retrieve_facebook_objects_insights(self, facebook_objects, fields, params):
         date_preset = params["date_preset"]
+
+        # retreive insights, accounts are returned if ad report is needed
         results, failed_jobs = run_async_jobs(facebook_objects, self.retrieve_insights, fields, params)
-        self.failed_jobs.extend(failed_jobs)
-        accounts = []
-        for obj in results:
-            if obj.__class__.__name__ == "AdAccount":
-                accounts.append(obj)
-                results.remove(obj)
-        if accounts:
-            finished_reports_or_accounts, failed_jobs = run_async_jobs(
-                accounts, self.process_async_report, fields, params
+        async_needed_accounts = [acct for acct in results if isinstance(acct, AdAccount)]
+
+        # run async reports
+        if async_needed_accounts:
+            finished_reports_or_accounts, failed_async_jobs = run_async_jobs(
+                async_needed_accounts, self.process_async_report, fields, params
             )
-            failed_accounts = []
-            for obj in finished_reports_or_accounts:
-                if obj.__class__.__name__ == "AdAccount":
-                    failed_accounts.append(obj)
-                    finished_reports_or_accounts.remove(obj)
-            self.logger.info(f"Finished processing async reports ({date_preset})")
-            self.failed_jobs.extend(failed_jobs)
+            # accounts that have failed after retrying multiple times
+            failed_accounts = [acct for acct in result if isinstance(acct, AdAccount)]
+            self.failed_jobs.extend([*failed_jobs, failed_async_jobs])
             results.extend(finished_reports_or_accounts)
             self.failed_accounts[date_preset].extend(failed_accounts)
+
+        # process cursors (RESULTS)
+        results = [result for result in results if isinstance(result, Cursor)]
         for result in results:
             self.extract_business_use_case_usage(result.headers())
         run_async_jobs(results, extend_list_async, self.reporting_data[date_preset])
