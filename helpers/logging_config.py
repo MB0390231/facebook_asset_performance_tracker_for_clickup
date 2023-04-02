@@ -1,31 +1,37 @@
 import logging
 import datetime
+from datetime import datetime
 
 
 def current_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 
-class BaseLogger:
-    loggers_dict = {}
+loggers_dict = {}
 
-    def __init__(self, name=None, console_level=logging.INFO):
-        if name is None:
-            name = self.__class__.__name__
 
-        if name in self.loggers_dict:
-            self.logger = self.loggers_dict[name]
-        else:
-            self.logger = logging.getLogger(name)
-            self.logger.setLevel(logging.DEBUG)
+def get_logger(name=None, console_level=logging.INFO):
+    global loggers_dict
 
-            file_handler = logging.FileHandler(f"logs/{current_date()}.log", "a")
-            file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
-            self.logger.addHandler(file_handler)
+    if name is None:
+        name = "BaseLogger"
 
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(console_level)
-            console_handler.setFormatter(logging.Formatter("%(message)s"))
-            self.logger.addHandler(console_handler)
+    if name in loggers_dict:
+        logger = loggers_dict[name]
+    else:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.DEBUG)
 
-            self.loggers_dict[name] = self.logger
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        file_handler = logging.FileHandler(f"logs/{current_date}.log", "a")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(name)s : %(message)s"))
+        logger.addHandler(file_handler)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(console_handler)
+
+        loggers_dict[name] = logger
+
+    return logger

@@ -1,10 +1,10 @@
-from helpers.logging_config import BaseLogger
+from helpers.logging_config import get_logger
 from helpers.helpers import run_async_jobs
 import time
 import math
 
 
-class ClickupJobPool(BaseLogger):
+class ClickupJobPool:
     """
     This class is going to handle the discovery of facebook insights fields to be used by the clickup job handler.
     Statistics Discovery:
@@ -48,6 +48,7 @@ class ClickupJobPool(BaseLogger):
         self.clickup_client = clickup_client
         self.jobs = []
         self.failed_futures = []
+        self.logger = get_logger(self.__class__.__name__)
         return super().__init__()
 
     def create_insights_jobs(

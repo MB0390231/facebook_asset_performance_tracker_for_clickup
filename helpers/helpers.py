@@ -4,13 +4,13 @@ import csv
 import re
 import csv
 import datetime
-from helpers.logging_config import BaseLogger
+from helpers.logging_config import get_logger
 import csv
 from time import mktime, sleep
 from typing import Callable, Dict, List, Any, Optional, Union
 from datetime import timedelta, datetime
 
-logger = BaseLogger(name="helpers")
+logger = get_logger(name="helpers")
 
 
 def generate_datetime_string(day_delta):
