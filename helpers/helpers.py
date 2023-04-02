@@ -116,14 +116,14 @@ def extend_list_async(cursor, result_list: List) -> None:
         with Lock():
             result_list.extend(cursor)
         len_after = len(result_list)
-        logger.logger.debug(f"Extended list from {len_before} to {len_after}")
+        logger.debug(f"Extended list from {len_before} to {len_after}")
     except:
         sleep(1)
         len_before = len(result_list)
         with Lock():
             result_list.extend(cursor)
         len_after = len(result_list)
-        logger.logger.debug(f"Extended list from {len_before} to {len_after}")
+        logger.debug(f"Extended list from {len_before} to {len_after}")
     return
 
 
@@ -159,7 +159,7 @@ def run_async_jobs(jobs, job_fn, *args, **kwargs):
                 result = future.result()
                 success.append(result)
             except Exception as e:
-                logger.logger.exception(
+                logger.exception(
                     f"Error executing Future:\n"
                     f"job: {job}\n"
                     f"job_fn: {job_fn.__name__}\n"
