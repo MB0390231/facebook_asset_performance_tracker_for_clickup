@@ -7,6 +7,7 @@ from helpers.helpers import (
     generate_reporting_row,
     generate_rejected_ad_row,
 )
+from gohighlevel_python_sdk.exceptions import GHLRequestError
 from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
@@ -262,26 +263,17 @@ class GHLDataContainer:
         super().__init__()
 
     def set_locations(self):
-        locations = self.agency.get_locations()
+        locations = self.call_method(self.agency, "get_locations")
         self.locations = locations
         return self
 
     def set_location_calendars(self, locations):
         self.logger.info("Retreiving Calendars")
-        complete = False
-        attempts = 0
-        initial_delay = 5
-        jobs = locations
-        while not complete or attempts < 3:
-            success, failed = run_async_jobs(jobs, lambda job: (job["id"], job.get_calendar_services()))
-            for location_id, location_calendars in success:
-                self.calendars[location_id] = location_calendars
-            if not failed:
-                break
-            jobs = [job[0] for job in failed]
-            attempts += 1
-            sleep(initial_delay)
-            initial_delay *= 2
+        success, failed = run_async_jobs(
+            locations, lambda job: (job["id"], self.call_method(job, "get_calendar_services"))
+        )
+        for location_id, location_calendars in success:
+            self.calendars[location_id] = location_calendars
         if failed:
             self.failed_futures.extend(failed)
         self.logger.info(f"Successfully retrieved {len(locations)-len(failed)} of {len(locations)}")
@@ -292,27 +284,35 @@ class GHLDataContainer:
         for location_id, calendars in self.calendars.items():
             appts = []
             for calendar in calendars:
-                query = self.retrieve_calendar_appointments(calendar, appointment_params)
-                if not query:
-                    continue
+                query = self.call_method(calendar, "get_appointments", appointment_params)
                 appts.extend(query)
                 self.logger.debug(f"Retrieved {len(query)} appointments for calender id: {calendar['id']}")
             self.appointments[location_id] = appts
             self.logger.info(f"Retrieved {len(appts)} for location id: {location_id}")
         return self
 
-    def retrieve_calendar_appointments(self, calendar, appointment_params):
+    def call_method(self, ghl_object, method_name, *args, **kwargs):
+        """
+        GHL's database fails a ton. This retries every method_name three times
+        """
+        success = False
         attempts = 0
-        while True and attempts <= 3:
+        initial_delay = 1
+        method = getattr(ghl_object, method_name)
+        while not success or attempts <= 3:
+            attempts += 1
             try:
-                query = calendar.get_appointments(appointment_params)
-                return query
-            except Exception as e:
-                self.logger.exception(e, exc_info=True)
-                self.logger.debug(f"Retrying for calendar id: {calendar['id']}. Attempted {attempts} of 3")
-                attempts += 1
-                sleep(5)
-        self.logger.error(f"Failed to retrieve appointments for calendar id: {calendar['id']}")
+                result = method(*args, **kwargs)
+                return result
+            except GHLRequestError:
+                self.logger.info(
+                    f"GHL {ghl_object.__class__.__name__}, id: {ghl_object['id']}, method: {method.__name__}. Attempt {attempts} out of 3"
+                )
+                sleep(initial_delay)
+
+        self.logger.info(
+            f"Failed to call method {method.__name__} on {ghl_object.__class__.__name__} with id: {ghl_object['id']} after {attempts} attempts"
+        )
         return None
 
     def export_all_data_csv(self):
