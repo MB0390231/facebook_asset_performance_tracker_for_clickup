@@ -11,12 +11,12 @@ from facebook_business.adobjects.business import Business
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 from facebook_business.api import Cursor
-from helpers.logging_config import BaseLogger
+from helpers.logging_config import get_logger
 from time import sleep, time
 import json
 
 
-class FaceBookDataContainer(BaseLogger):
+class FaceBookDataContainer:
     ad_account_status_mapping = {
         "1": "ACTIVE",
         "2": "DISABLED",
@@ -31,6 +31,7 @@ class FaceBookDataContainer(BaseLogger):
     }
 
     def __init__(self):
+        self.logger = get_logger(name=self.__class__.__name__)
         self.accounts = defaultdict(list)
         self.failed_jobs = []
         self.reporting_data = defaultdict(list)
@@ -123,26 +124,49 @@ class FaceBookDataContainer(BaseLogger):
     def process_async_report(self, facebook_object, fields, params, max_attempts=5, initial_delay=60):
         # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
         attempts = 0
+        success = False
         self.logger.info(f"Processing Async report for object id: {facebook_object['id']}.")
-        try:
-            while attempts <= max_attempts:
-                report = self.call_method(facebook_object, "get_insights_async", fields, params)
-                report = self.wait_for_job(report)
-                if report[AdReportRun.Field.async_status] == "Job Completed":
-                    return report.get_result(params={"limit": 300})
-                self.logger.info(
-                    f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}. Retrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
-                )
-                sleep(initial_delay)
-                attempts += 1
-                initial_delay *= 2
+        while attempts <= max_attempts:
+            attempts += 1
+            report = self.call_method(facebook_object, "get_insights_async", fields, params)
+            report = self.wait_for_job(report)
+            if report[AdReportRun.Field.async_status] == "Job Completed":
+                success = True
+                break
             self.logger.info(
-                f"Async report for facebook object id: {facebook_object['id']} failed with an async_status of {report[AdReportRun.Field.async_status]}"
+                f"Async report for facebook object id: {facebook_object['id']} unsuccessful.\nAsync_status of {report[AdReportRun.Field.async_status]}.\nRetrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
             )
-            return facebook_object
-        except FacebookRequestError as e:
-            self.logger.exception(e)
-            return facebook_object
+            sleep(initial_delay)
+            initial_delay *= 2
+
+        if success:
+            return self.unpack_and_return_report_results(facebook_object, report)
+
+        self.logger.info(
+            f"Async report for facebook object id: {facebook_object['id']} failed.\nAsync_status of {report[AdReportRun.Field.async_status]}.\{attempts} attempts"
+        )
+        return facebook_object
+
+    def unpack_and_return_report_results(self, facebook_object, report, max_attempts=3, initial_delay=20):
+        success = False
+        attempts = 0
+        while not success and attempts <= max_attempts:
+            attempts += 1
+            try:
+                return report.get_result(params={"limit": 300})
+            except FacebookRequestError as e:
+                if e.body()["error"].get("code", None) in [1, 2, 4, 17, 341]:
+                    self.logger.info(
+                        f"Encountered error while unpacking results.\nFacebook object id: {facebook_object['id']}.\nError {e.body()['error']}.\nSleeping {initial_delay} seconds then retrying"
+                    )
+                    sleep(initial_delay)
+                else:
+                    raise (e)
+            initial_delay *= 2
+        self.logger.info(
+            f"Failed to unpack results for facebook object id: {facebook_object['id']}.\n{attempts} attempts"
+        )
+        return facebook_object
 
     def wait_for_job(self, report, timeout=600):
         """
@@ -227,8 +251,9 @@ class FaceBookDataContainer(BaseLogger):
         return self
 
 
-class GHLDataContainer(BaseLogger):
+class GHLDataContainer:
     def __init__(self, agency):
+        self.logger = get_logger(self.__class__.__name__)
         self.agency = agency
         self.locations = []
         self.calendars = {}
