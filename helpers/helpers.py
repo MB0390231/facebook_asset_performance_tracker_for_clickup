@@ -9,6 +9,7 @@ import csv
 from time import mktime, sleep
 from typing import Callable, Dict, List, Any, Optional, Union
 from datetime import timedelta, datetime
+import pytz
 
 logger = get_logger(name="helpers")
 
@@ -55,7 +56,8 @@ def convert_timestamp_to_date(timestamp):
 
 
 def current_date():
-    return datetime.now().strftime("%Y-%m-%d")
+    eastern = pytz.timezone("US/Eastern")
+    return datetime.now(eastern).strftime("%Y-%m-%d")
 
 
 def logs_date():
@@ -347,7 +349,7 @@ def upload_to_clickup(tasks):
     # generate a timestamp with the current date and time in the format YYYY-MM-DD HH:MM am (e.g. 2020-01-01 12:00 am)
     for task in tasks:
         if task["name"].lower() == "runtime":
-            file = {"attachment": (f"{current_date()}.log", open(f"logs/{current_date()}.log", "rb"))}
+            file = {"attachment": (f"{current_date()}.log", open("logs/runtime.log", "rb"))}
             task.upload_file(file)
             print("Uploading runtime log")
             continue
