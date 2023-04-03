@@ -122,7 +122,7 @@ class FaceBookDataContainer:
             self.logger.exception(e)
             return facebook_object
 
-    def process_async_report(self, facebook_object, fields, params, max_attempts=5, initial_delay=60):
+    def process_async_report(self, facebook_object, fields, params, max_attempts=10, initial_delay=60, max_delay=600):
         # creates an async report, waits for it to finish, and returns the reports. Retries up to 5 times with an exponential backoff.
         attempts = 0
         success = False
@@ -137,7 +137,7 @@ class FaceBookDataContainer:
             self.logger.info(
                 f"Async report for facebook object id: {facebook_object['id']} unsuccessful.\nAsync_status of {report[AdReportRun.Field.async_status]}.\nRetrying in {initial_delay} seconds. Attempt {attempts} of {max_attempts}."
             )
-            sleep(initial_delay)
+            sleep(min(initial_delay, max_delay))
             initial_delay *= 2
 
         if success:
