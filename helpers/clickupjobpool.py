@@ -47,7 +47,6 @@ class ClickupJobPool:
     def __init__(self, clickup_client):
         self.clickup_client = clickup_client
         self.jobs = []
-        self.failed_futures = []
         self.logger = get_logger(self.__class__.__name__)
         return super().__init__()
 
@@ -142,7 +141,7 @@ class ClickupJobPool:
             self.logger.debug(f"Created job for asset: {loc_id} {fields}: {id} value: {value}")
         return
 
-    def process_clickup_jobs(self):
+    def process_clickup_jobs(self, do_retry=True):
         """
         Executes a batch of jobs by updating custom fields in a task using a `ClickupClient` object.
 
@@ -154,38 +153,19 @@ class ClickupJobPool:
             dict: A dictionary with the following keys:
                 - `failures` (list): A list of tuples, where each tuple represents a job that failed to execute.
         """
-        complete = False
-        failures = []
         retries = []
         batch = 0
-        while not complete:
-            self.clickup_client.refresh_rate_limit()
-            rate = int(self.clickup_client.RATE_LIMIT_REMAINING)
-            reset = float(self.clickup_client.RATE_RESET)
-            # pop the number of jobs equal to the rate limit and run them
-            queued_jobs = []
-            if rate > len(self.jobs):
-                rate = len(self.jobs)
-                complete = True
-            for _ in range(rate):
-                queued_jobs.append(self.jobs.pop())
-            retry, failure = run_async_jobs(queued_jobs, self.run_clickup_field_job)
+        while len(self.jobs) > 0:
+            status, _ = run_async_jobs(self.generate_jobs(), self.run_clickup_field_job)
             batch += 1
-            self.logger.info(f"Batch {batch} complete. Remaining jobs: {len(self.jobs)} Failed jobs: {len(failure)}")
-            retries.extend([job for job in retry if isinstance(job, tuple)])
-            failures.extend(failure)
-            sleep = reset - time.time()
-            if sleep > 0 and not complete:
-                self.logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
-                time.sleep(math.ceil(sleep))
-        if retries:
-            self.logger.info(f"Finsihed Processing Jobs. {len(retries)} re-added into the queue.")
-        self.jobs = retries
-        # retry failed jobs
-        if self.jobs:
-            self.logger.info(f"Retrying {len(self.jobs)} jobs.")
-            self.process_clickup_jobs()
-        self.failed_futures.extend(failures)
+            retries.extend([job for job in status if isinstance(job, tuple)])
+            self.logger.info(f"Batch {batch} complete. Remaining jobs: {len(self.jobs)}")
+            self.wait_for_reset()
+        # retries once
+        if retries and do_retry:
+            self.logger.info(f"Retrying {len(retries)} failed jobs.")
+            self.jobs.extend(retries)
+            self.process_clickup_jobs(do_retry=False)
         return
 
     def run_clickup_field_job(self, job):
@@ -209,10 +189,30 @@ class ClickupJobPool:
             values = {"value": job[2]}
             _ = self.clickup_client.make_request(method=method, route=route, values=values)
             self.logger.debug(f"Updated task id: {job[0]} custom field id: {job[1]} with value: {job[2]}")
+        # define the error that needs to be handled
         except Exception as e:
             # log the error, task id (job[0]), custom field id (job[1]), and value (job[2])
-            self.logger.debug(
+            self.logger.exception(
                 f"Failed to update task id: {job[0]} custom field id: {job[1]} with value: {job[2]} error: {e}"
             )
             return job
         return
+
+    def wait_for_reset(self):
+        reset = float(self.clickup_client.RATE_RESET)
+        sleep = reset - time.time()
+        if sleep > 0:
+            self.logger.info(f"Sleeping for {math.ceil(sleep)} seconds.")
+            time.sleep(math.ceil(sleep))
+        return
+
+    def generate_jobs(self):
+        self.clickup_client.refresh_rate_limit()
+        rate = int(self.clickup_client.RATE_LIMIT_REMAINING)
+        # pop the number of jobs equal to the rate limit and run them
+        queued_jobs = []
+        if rate > len(self.jobs):
+            rate = len(self.jobs)
+        for _ in range(rate):
+            queued_jobs.append(self.jobs.pop())
+        return queued_jobs
