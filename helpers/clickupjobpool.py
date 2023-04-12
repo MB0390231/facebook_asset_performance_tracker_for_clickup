@@ -105,6 +105,36 @@ class ClickupJobPool:
             self.logger.debug(f"Created job for asset: {asset} {fields}: {id} value: {value}")
         return
 
+    def create_insights_percent_job(self, task, custom_fields, asset_data):
+        """
+        Updates field with the name format as "{metric} %"
+        """
+        for fields, id in custom_fields.items():
+            # split the fields => ["METRIC", "%"] and check if % sign in the name
+            split_fields = fields.lower().split()
+            if (
+                len(split_fields) < 2
+                or split_fields[0] not in self.insights_field_mapping
+                or "%" not in split_fields[1]
+            ):
+                continue
+            metric = split_fields[0]
+
+            try:
+                # get the value and handle key errors
+                if isinstance(metric, tuple):
+                    value = asset_data[metric[0]].get(metric[1], 0)
+                else:
+                    value = asset_data[metric]
+            except KeyError:
+                value = None
+            # check if value of the field matches the value to insert
+            if value in [field.get("value") for field in task["custom_fields"] if field["name"] == fields]:
+                continue
+            self.jobs.append((task["id"], id, value))
+            self.logger.debug(f"Created job for asset: {task['name']} {fields}: {id} value: {value}")
+        return
+
     def create_ads_with_issues_jobs(
         self, task, custom_fields, asset_data, asset_match_type="name", custom_field_location=None
     ):

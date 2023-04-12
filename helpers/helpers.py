@@ -8,7 +8,7 @@ from helpers.logging_config import get_logger
 import csv
 from time import mktime, sleep
 from typing import Callable, Dict, List, Any, Optional, Union
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 import pytz
 
 logger = get_logger(name="helpers")
@@ -360,3 +360,14 @@ def upload_to_clickup(tasks):
         except Exception as e:
             print(f"No file to upload for task {task['name']}")
     return None
+
+
+def match_time_window(start_time_iso_8601, end_time_iso_8601, start_delta, end_delta):
+    today = date.today()
+    start_of = today - timedelta(days=start_delta)
+    end_of = today - timedelta(days=end_delta)
+
+    start_timestamp = datetime.strptime(start_time_iso_8601, "%Y-%m-%d").date()
+    end_timestamp = datetime.strptime(end_time_iso_8601, "%Y-%m-%d").date()
+
+    return start_timestamp == start_of and end_timestamp == end_of

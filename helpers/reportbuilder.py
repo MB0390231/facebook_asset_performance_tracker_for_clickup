@@ -243,3 +243,21 @@ def process_appointments(
             report_dict["appt 7"] += 1
 
     return report_dict
+
+
+def insights_percent_difference(prev: dict, current: dict):
+    """
+    takes in two dictionary objects and computes the percent difference between every key.
+    """
+    report = {}
+    for key, values in current.items():
+        if isinstance(values, dict):
+            report[key] = insights_percent_difference(prev[key], current[key])
+            continue
+        elif key not in prev.keys():
+            report[key] = None
+            continue
+        if values and prev[key]:
+            value = ((values - prev[key]) / abs(prev[key])) * 100
+            report[key] = round(value, 2)
+    return report
